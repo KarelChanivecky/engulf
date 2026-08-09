@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Literal, overload
 
 from .models import AdditionPlacement
+from .state import StateScope, StateStore, WorkspaceState
 
 
 class PluginAPI(ABC):
@@ -41,3 +43,17 @@ class PluginAPI(ABC):
     @abstractmethod
     def set_context(self, context_id: str, value: object) -> None:
         """Create or overwrite declared context."""
+
+    @overload
+    def state(self, scope: Literal[StateScope.WORKSPACE]) -> WorkspaceState: ...
+
+    @overload
+    def state(self, scope: Literal[StateScope.USER]) -> StateStore: ...
+
+    @abstractmethod
+    def state(self, scope: StateScope) -> StateStore:
+        """Return this plugin's store for the selected scope."""
+
+    @abstractmethod
+    def known_workspaces(self) -> tuple[WorkspaceState, ...]:
+        """Return every centrally registered workspace owned by this plugin."""

@@ -38,6 +38,12 @@ from .plugin_loader import (
     resolve_plugin_directory,
     resolve_plugin_orders,
 )
+from .state import (
+    CallStateManager,
+    StateHomeResolver,
+    WorkspaceCleanupFailure,
+    WorkspaceRootResolver,
+)
 
 FRAMEWORK_ERROR_EXIT = 70
 
@@ -57,6 +63,8 @@ class Engulf:
         plugin_dir: str | os.PathLike[str] | None = None,
         discover_installed: bool = True,
         completion_provider: CompletionCallable | CompletionProvider | None = None,
+        workspace_root_resolver: WorkspaceRootResolver | None = None,
+        state_home_resolver: StateHomeResolver | None = None,
     ) -> None:
         binary_value = os.fspath(binary)
         if isinstance(binary_value, bytes) or not binary_value:
@@ -65,6 +73,12 @@ class Engulf:
             raise ValueError("binary cannot contain NUL characters")
         if not isinstance(discover_installed, bool):
             raise TypeError("discover_installed must be a boolean")
+        if workspace_root_resolver is not None and not callable(
+            workspace_root_resolver
+        ):
+            raise TypeError("workspace_root_resolver must be callable")
+        if state_home_resolver is not None and not callable(state_home_resolver):
+            raise TypeError("state_home_resolver must be callable")
 
         self._binary = binary_value
         self._application_id = normalize_application_id(application_id)
@@ -88,6 +102,8 @@ class Engulf:
             item.plugin for item in self._postprocess_order
         )
         self._completion_provider = completion_provider
+        self._workspace_root_resolver = workspace_root_resolver
+        self._state_home_resolver = state_home_resolver
         self._arguments = ArgumentRegistry()
         self._completions = CompletionRegistry()
 
@@ -147,11 +163,36 @@ class Engulf:
             return FRAMEWORK_ERROR_EXIT
 
         mode = CallMode.HELP if "--help" in wrapper_args else CallMode.NORMAL
-        context_table = CallContextTable()
-        apis = self._create_plugin_apis(len(wrapper_args), context_table)
         try:
-            return self._run_call(wrapper_args, mode, apis)
+            cwd = Path.cwd().resolve(strict=True)
+        except OSError as error:
+            self._report_error(f"cannot resolve current directory: {error}")
+            return FRAMEWORK_ERROR_EXIT
+
+        state_manager = CallStateManager(
+            application_id=self._application_id,
+            binary=self._binary,
+            wrapper_args=wrapper_args,
+            mode=mode,
+            cwd=cwd,
+            workspace_root_resolver=self._workspace_root_resolver,
+            state_home_resolver=self._state_home_resolver,
+            environment=dict(os.environ),
+            effective_uid=os.geteuid(),
+            effective_gid=os.getegid(),
+        )
+        context_table = CallContextTable()
+        apis = self._create_plugin_apis(len(wrapper_args), context_table, state_manager)
+        cleanup_failures: tuple[WorkspaceCleanupFailure, ...] = ()
+        try:
+            result = self._run_call(wrapper_args, mode, apis)
         finally:
+            cleanup_failures = state_manager.finalize_destructions()
+            for failure in cleanup_failures:
+                self._report_error(
+                    "workspace state cleanup failed for "
+                    f"{failure.plugin_id} at {failure.root}: {failure.error}"
+                )
             for api in apis.values():
                 api.close()
             unused_ids = context_table.unused_ids
@@ -161,6 +202,9 @@ class Engulf:
                     UnusedContextWarning,
                     stacklevel=2,
                 )
+        if cleanup_failures:
+            return FRAMEWORK_ERROR_EXIT
+        return result
 
     def _run_call(
         self,
@@ -240,7 +284,10 @@ class Engulf:
         return outcome.exit_code
 
     def _create_plugin_apis(
-        self, argument_count: int, context_table: CallContextTable
+        self,
+        argument_count: int,
+        context_table: CallContextTable,
+        state_manager: CallStateManager,
     ) -> dict[str, RuntimePluginAPI]:
         return {
             item.plugin_id: RuntimePluginAPI(
@@ -249,6 +296,7 @@ class Engulf:
                 context_reads=item.context_reads,
                 context_writes=item.context_writes,
                 context_table=context_table,
+                state_manager=state_manager,
             )
             for item in self._preprocess_order
         }

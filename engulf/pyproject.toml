@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
-dependencies = ["engulf-api>=1.2,<2"]
+dependencies = ["engulf-api>=1.0,<2"]
 
 [project.scripts]
 engulf-completion = "engulf.completion_cli:main"

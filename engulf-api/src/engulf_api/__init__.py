@@ -3,6 +3,7 @@ from .errors import (
     ContextAccessError,
     MissingContextError,
     PluginPhaseError,
+    StateCatalogError,
     UnusedContextWarning,
 )
 from .identifiers import validate_global_identifier
@@ -30,9 +31,10 @@ from .registry import (
     invoke_provider,
     normalize_candidate,
 )
+from .state import StateScope, StateStore, WorkspaceState
 
 PLUGIN_API_MAJOR = 1
-PLUGIN_API_VERSION = "1.2.0"
+PLUGIN_API_VERSION = "1.0.0"
 
 __all__ = [
     "PLUGIN_API_MAJOR",
@@ -60,7 +62,11 @@ __all__ = [
     "PluginDependency",
     "PluginPhaseError",
     "Shell",
+    "StateCatalogError",
+    "StateScope",
+    "StateStore",
     "UnusedContextWarning",
+    "WorkspaceState",
     "invoke_provider",
     "normalize_candidate",
     "plugin_name",

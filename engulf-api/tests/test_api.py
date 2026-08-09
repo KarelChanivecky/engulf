@@ -14,6 +14,10 @@ from engulf_api import (
     PluginAPI,
     PluginDependency,
     Shell,
+    StateCatalogError,
+    StateScope,
+    StateStore,
+    WorkspaceState,
     validate_global_identifier,
 )
 
@@ -28,7 +32,7 @@ class ExamplePlugin(Plugin):
 class ApiTestCase(unittest.TestCase):
     def test_api_version_matches_contract(self) -> None:
         self.assertEqual(PLUGIN_API_MAJOR, 1)
-        self.assertEqual(PLUGIN_API_VERSION, "1.2.0")
+        self.assertEqual(PLUGIN_API_VERSION, "1.0.0")
 
     def test_plugin_priority_defaults_to_fifty_and_can_be_overridden(self) -> None:
         class EarlierPlugin(ExamplePlugin):
@@ -70,6 +74,21 @@ class ApiTestCase(unittest.TestCase):
     def test_plugin_api_is_abstract(self) -> None:
         with self.assertRaises(TypeError):
             PluginAPI()
+
+    def test_state_contract_is_public_and_abstract(self) -> None:
+        self.assertEqual(
+            tuple(StateScope),
+            (StateScope.WORKSPACE, StateScope.USER),
+        )
+        self.assertEqual(StateScope.WORKSPACE.value, "workspace")
+        self.assertEqual(StateScope.USER.value, "user")
+        with self.assertRaises(TypeError):
+            StateStore()
+        with self.assertRaises(TypeError):
+            WorkspaceState()
+        self.assertTrue(issubclass(StateCatalogError, RuntimeError))
+        self.assertIn("state", PluginAPI.__abstractmethods__)
+        self.assertIn("known_workspaces", PluginAPI.__abstractmethods__)
 
     def test_argument_registry_rejects_duplicate_options(self) -> None:
         registry = ArgumentRegistry()

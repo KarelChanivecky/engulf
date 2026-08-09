@@ -7,7 +7,7 @@ This repository contains two independently publishable Python 3.14 distributions
 | `engulf-api/` | `engulf-api` | `engulf_api` | Stable, dependency-free plugin contract |
 | `engulf/` | `engulf` | `engulf` | Plugin discovery, process execution, and shell integration |
 
-`engulf` depends on `engulf-api>=1.2,<2`. Installed plugins depend directly on
+`engulf` depends on `engulf-api>=1.0,<2`. Installed plugins depend directly on
 `engulf-api`, so plugin compatibility follows the API distribution's semantic
 version without coupling plugins to the runtime implementation.
 
@@ -33,4 +33,5 @@ python -m twine check engulf-api/dist/* engulf/dist/*
 
 See [`engulf-api/README.md`](engulf-api/README.md) for the versioned contract and
 [`engulf/README.md`](engulf/README.md#creating-an-installed-plugin) for the complete
-plugin-authoring guide, runtime usage, and discovery behavior.
+plugin-authoring guide, runtime usage, discovery behavior, and
+[persistent state](engulf/README.md#persistent-plugin-state).

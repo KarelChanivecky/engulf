@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
+from typing import Literal, overload
 
 from engulf_api import (
     AdditionPlacement,
@@ -9,7 +11,12 @@ from engulf_api import (
     MissingContextError,
     PluginAPI,
     PluginPhaseError,
+    StateScope,
+    StateStore,
+    WorkspaceState,
 )
+
+from .state import CallStateManager, RuntimeStateStore, RuntimeWorkspaceState
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,16 +79,21 @@ class RuntimePluginAPI(PluginAPI):
         context_reads: frozenset[str],
         context_writes: frozenset[str],
         context_table: CallContextTable,
+        state_manager: CallStateManager,
     ) -> None:
         self._plugin_id = plugin_id
         self._argument_count = argument_count
         self._context_reads = context_reads
         self._context_writes = context_writes
         self._context_table = context_table
+        self._state_manager = state_manager
         self._phase = _HookPhase.INACTIVE
         self._removals: set[int] = set()
         self._additions: list[Addition] = []
         self._preemption: int | None = None
+        self._user_state: RuntimeStateStore | None = None
+        self._workspace_state: RuntimeWorkspaceState | None = None
+        self._known_workspace_states: dict[Path, RuntimeWorkspaceState] = {}
 
     def activate_preprocess(self) -> None:
         self._activate(_HookPhase.PREPROCESS)
@@ -161,6 +173,45 @@ class RuntimePluginAPI(PluginAPI):
         self._require_active("set_context")
         self._require_context_access(context_id, self._context_writes, "write")
         self._context_table.set(context_id, value)
+
+    @overload
+    def state(self, scope: Literal[StateScope.WORKSPACE]) -> WorkspaceState: ...
+
+    @overload
+    def state(self, scope: Literal[StateScope.USER]) -> StateStore: ...
+
+    def state(self, scope: StateScope) -> StateStore:
+        self._require_active("state")
+        if not isinstance(scope, StateScope):
+            raise TypeError("scope must be a StateScope")
+        if scope is StateScope.USER:
+            if self._user_state is None:
+                self._user_state = RuntimeStateStore(
+                    self._state_manager.user_backend(self._plugin_id),
+                    self._require_active,
+                )
+            return self._user_state
+
+        if self._workspace_state is None:
+            self._workspace_state = RuntimeWorkspaceState(
+                self._state_manager.current_workspace_backend(self._plugin_id),
+                self._require_active,
+            )
+            self._known_workspace_states[self._workspace_state.root] = (
+                self._workspace_state
+            )
+        return self._workspace_state
+
+    def known_workspaces(self) -> tuple[WorkspaceState, ...]:
+        self._require_active("known_workspaces")
+        states: list[RuntimeWorkspaceState] = []
+        for backend in self._state_manager.known_workspace_backends(self._plugin_id):
+            state = self._known_workspace_states.get(backend.root)
+            if state is None:
+                state = RuntimeWorkspaceState(backend, self._require_active)
+                self._known_workspace_states[backend.root] = state
+            states.append(state)
+        return tuple(states)
 
     def _activate(self, phase: _HookPhase) -> None:
         if self._phase is _HookPhase.CLOSED:

@@ -25,7 +25,7 @@ class AuditPlugin(Plugin):
 plugin = AuditPlugin
 ```
 
-Plugin wheels should declare `engulf-api>=1.2,<2`. The contract follows semantic
+Plugin wheels should declare `engulf-api>=1.0,<2`. The contract follows semantic
 versioning: compatible additions increment the minor version, while changes that
 break plugin implementations or event consumers increment the major version.
 `PLUGIN_API_MAJOR` is also encoded in installed-plugin entry-point groups such as
@@ -71,6 +71,50 @@ the runtime. During either active hook, `PluginAPI` provides `get_context`,
 `require_context`, and `set_context`. Preprocess hooks additionally receive argument
 editing and preemption capabilities through `remove`, `remove_range`, `add`, and
 `preempt`. A retained API object cannot be used outside its active hook.
+
+## Persistent State Contract
+
+`PluginAPI.state(StateScope.USER)` returns a plugin-specific `StateStore` for
+user-global data. `PluginAPI.state(StateScope.WORKSPACE)` returns a `WorkspaceState`
+for the wrapping application's current canonical workspace. Both scopes are explicit;
+there is no combined scope.
+
+```python
+from engulf_api import Plugin, StateScope
+
+
+class StatefulPlugin(Plugin):
+    plugin_id = "com.example.stateful"
+
+    def help(self) -> str:
+        return ""
+
+    def before_call(self, event, api) -> None:
+        workspace = api.state(StateScope.WORKSPACE)
+        workspace.write_text("deployment-id", "deployment-123")
+
+    def after_call(self, event, api) -> None:
+        user = api.state(StateScope.USER)
+        user.write_text("last-exit-code", str(event.outcome.exit_code))
+```
+
+`StateStore` exposes a managed directory plus validated single-filename operations:
+`path`, `exists`, `read_bytes`, `read_text`, `write_bytes`, `write_text`, and `delete`.
+`WorkspaceState.root` identifies the canonical workspace and
+`WorkspaceState.destroy()` queues removal of the calling plugin's namespace. The
+runtime defers queued destruction until lifecycle dispatch completes.
+
+`PluginAPI.known_workspaces()` returns every centrally cataloged `WorkspaceState`
+where the calling plugin has state. This supports global operations from a different
+working directory. It does not reveal namespaces owned only by other plugins, and a
+returned root may no longer exist on disk.
+
+State objects are call-bound capabilities: their methods are valid only during the
+calling plugin's active before- or after-hook. Files persist across calls and
+processes. Filesystem location, canonical workspace selection, locking, ownership,
+atomic writes, cleanup, and exit-code policy are runtime responsibilities described
+in the Engulf
+[persistent-state guide](../engulf/README.md#persistent-plugin-state).
 
 See the Engulf runtime's
 [plugin-authoring guide](../engulf/README.md#creating-an-installed-plugin) for a

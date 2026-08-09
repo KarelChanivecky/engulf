@@ -33,6 +33,56 @@ my-command = "my_package.cli:main"
 An explicit binary path can be supplied instead of a command name. Command names are
 resolved from `PATH` immediately before execution, and Engulf never invokes a shell.
 
+### Workspace And State Configuration
+
+Persistent plugin state is centrally stored and keyed by the normalized application
+ID, plugin ID, and scope. By default, the workspace for one `run()` call is the
+canonical current working directory captured at the start of that call. A wrapping
+application can define a different workspace boundary, such as the directory that
+contains a lab topology:
+
+```python
+from pathlib import Path
+
+from engulf import Engulf, StateHomeContext, WorkspaceContext
+
+
+def resolve_workspace(context: WorkspaceContext) -> Path:
+    return context.cwd / "labs" / context.wrapper_args[1]
+
+
+def resolve_state_home(context: StateHomeContext) -> Path:
+    return context.owner_home / ".local" / "state"
+
+
+engulf = Engulf(
+    "real-command",
+    application_id="my-command",
+    workspace_root_resolver=resolve_workspace,
+    state_home_resolver=resolve_state_home,
+)
+```
+
+`WorkspaceContext` contains `application_id`, `binary`, the original `wrapper_args`,
+`mode`, and the captured `cwd`. A relative resolver result is interpreted relative to
+that `cwd`. The resolved workspace must already be a directory; Engulf canonicalizes
+it so aliases through `.` or symbolic links identify the same workspace. The resolver
+is called at most once per call and only when a plugin requests current-workspace
+state.
+
+`StateHomeContext` contains the effective and selected owner UID/GID, owner home, and
+whether Engulf recognized a sudo invocation. Its resolver must return an absolute
+path. Without a resolver, Engulf uses an absolute `XDG_STATE_HOME` or
+`~/.local/state`. When effective root has a valid non-root `SUDO_UID` and a valid
+`SUDO_GID`, Engulf instead uses and owns state as that invoking user and deliberately
+ignores root's `XDG_STATE_HOME`; direct root invocation has separate root-owned state.
+A custom resolver can implement a different system policy.
+
+Both resolvers are application policy, not plugin policy. Keep them stable after
+state has been written. Requesting a handle, checking a missing file, enumerating an
+empty catalog, or destroying an absent namespace does not create storage. Asking for
+a directory/path or writing a file creates the required directories.
+
 ## Creating An Installed Plugin
 
 An installed plugin is a normal wheel that depends on `engulf-api` and publishes an
@@ -91,7 +141,7 @@ description = "Audit logging for my-command"
 requires-python = ">=3.14"
 license = "MIT"
 dependencies = [
-    "engulf-api>=1.2,<2",
+    "engulf-api>=1.0,<2",
     "my-command>=2,<3",
 ]
 
@@ -273,6 +323,8 @@ plugin permits it to execute Python code in the wrapping application's process.
 | `register_completions()` | Optional | Adds static or dynamic completion candidates. |
 | `before_call(event, api)` | Optional | Inspects original arguments, edits the effective call, shares context, or preempts. |
 | `after_call(event, api)` | Optional | Observes the outcome and accesses shared context. |
+| `api.state(scope)` | During either hook | Accesses this plugin's persistent user or current-workspace files. |
+| `api.known_workspaces()` | During either hook | Enumerates workspace state owned by this plugin. |
 
 ## Local Plugins
 
@@ -336,7 +388,7 @@ order:
 ```toml
 [project]
 dependencies = [
-    "engulf-api>=1.2,<2",
+    "engulf-api>=1.0,<2",
     "my-command-identity-plugin>=1,<2",
 ]
 ```
@@ -397,6 +449,83 @@ when absent, while `require_context(id)` raises `MissingContextError`. Only read
 existing value counts as a read. At call completion, Engulf emits one filterable
 `UnusedContextWarning` containing the sorted IDs written but never read; it does not
 change the exit code. The table is discarded after each call.
+
+## Persistent Plugin State
+
+Call context is appropriate for one `Engulf.run()` invocation. Use persistent state
+when data written by one command must be read by a later command, such as recording a
+lab during `deploy` and consuming that record during `destroy`.
+
+```python
+from engulf_api import Plugin, StateScope
+
+
+class LabStatePlugin(Plugin):
+    plugin_id = "com.example.my_command.lab_state"
+
+    def help(self) -> str:
+        return ""
+
+    def before_call(self, event, api) -> None:
+        if event.wrapper_args[:1] == ("deploy",):
+            workspace = api.state(StateScope.WORKSPACE)
+            workspace.write_text("deployment-id", "lab-123")
+        elif event.wrapper_args[:2] == ("destroy", "--all"):
+            for known_workspace in api.known_workspaces():
+                deployment_id = known_workspace.read_text("deployment-id")
+                # Perform application-specific cleanup with deployment_id here.
+                known_workspace.destroy()
+
+
+plugin = LabStatePlugin
+```
+
+The two explicit scopes are:
+
+- `StateScope.WORKSPACE`: state associated with the current canonical workspace.
+  The central catalog makes it discoverable from another directory and from a later
+  process.
+- `StateScope.USER`: application-wide state for the current plugin and selected user.
+  Use this for preferences or indexes that do not belong to one workspace.
+
+There is no combined scope. A plugin that needs both calls `api.state()` twice. Each
+store provides `directory`, `path(filename)`, `exists`, `read_bytes`, `read_text`,
+`write_bytes`, `write_text`, and `delete`. Managed filenames must be one nonempty path
+component. Managed writes are atomic; Engulf creates managed directories with mode
+`0700` and files with mode `0600`. `directory` and `path()` expose `Path` objects for
+libraries that require filesystem paths, but operations performed directly through
+those paths bypass Engulf's atomic-write, locking, and ownership handling.
+
+Workspace state is stored centrally under this logical layout (the workspace key is
+the SHA-256 digest of its canonical absolute path):
+
+```text
+<state-home>/<application-id>/
+|-- user/<plugin-id>/
+|-- workspaces/<workspace-key>/
+|   |-- workspace.json
+|   `-- plugins/<plugin-id>/
+`-- .catalog.lock
+```
+
+`api.known_workspaces()` returns only records containing the calling plugin's
+namespace. A plugin cannot enumerate another plugin's records through this API. The
+recorded `WorkspaceState.root` can point to a directory that has since been moved or
+deleted; this is intentional so global cleanup can still find stale state. Moving a
+workspace creates a new identity and does not silently migrate the old record.
+
+`WorkspaceState.destroy()` queues deletion of only the calling plugin's namespace.
+Deletion is idempotent and deferred until postprocessing finishes, so state remains
+readable in subsequent reachable hooks. When the final plugin namespace is removed,
+Engulf removes the complete hashed workspace record. Every queued cleanup is attempted
+even if another cleanup fails, and any cleanup failure selects framework exit code
+`70`. Cleanup still commits after a nonzero binary result or plugin-hook failure. A
+process crash before finalization may leave state for a later cleanup attempt.
+
+State handles, like `PluginAPI`, can be used only while that plugin's lifecycle hook is
+active. The directories isolate names and prevent accidental cross-plugin state
+access; they are not a security sandbox. Plugins are trusted Python code and can use
+ordinary filesystem APIs outside this interface.
 
 Any exact `--help` argument enters help mode. Plugin hooks still receive events, but
 their edits and preemptions are ignored. The original arguments are passed to the
