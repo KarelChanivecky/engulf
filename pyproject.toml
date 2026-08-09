@@ -1,0 +1,8 @@
+[tool.ruff]
+target-version = "py314"
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+mypy_path = ["engulf-api/src", "engulf/src"]
+files = ["engulf-api/src/engulf_api", "engulf/src/engulf"]
