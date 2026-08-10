@@ -5,16 +5,16 @@ build-backend = "hatchling.build"
 [project]
 name = "engulf-api"
 version = "1.0.0"
-description = "Stable plugin contract for the Engulf binary-wrapper framework"
+description = "Stable goal and plugin contract for the Engulf CLI framework"
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
-keywords = ["cli", "wrapper", "plugins", "api"]
+keywords = ["cli", "applications", "plugins", "api"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "Operating System :: POSIX :: Linux",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",

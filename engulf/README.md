@@ -1,592 +1,298 @@
-# Engulf
+# engulf
 
-Engulf is a Python 3.14 framework for building transparent, plugin-driven wrappers
-around existing command-line programs. Normal stdin, stdout, and stderr are inherited
-by the wrapped process, and arguments pass through unchanged unless plugins explicitly
-remove or add them.
+`engulf` is the managed runtime for goal-oriented, plugin-based CLI applications.
+It depends on `engulf-api` and implements application lifecycle, installed-plugin
+discovery, dependency ordering, diagnostics, persistent state, transactions,
+resource leases, and workspace cleanup.
 
-The runtime depends on the separately versioned `engulf-api` distribution. Plugin
-implementations import `engulf_api`, not `engulf`.
+The runtime supports POSIX and Windows. Goals and plugins may impose narrower
+platform requirements, but discovery, lifecycle, diagnostics, context, and managed
+state do not require the executable-wrapper runtime.
 
-## Wrapping Application
+It does not contain executable-wrapper events, argument edits, process execution,
+help aggregation, or shell completion. Those live in the executable-wrapper goal
+packages.
 
-The application supplies the wrapped binary and its stable distribution name:
+## Constructing An Application
 
 ```python
-from engulf import Engulf
+from engulf import Application, PluginPolicy
+from my_report_goal import ReportGoal
 
-
-engulf = Engulf("real-command", application_id="my-command")
+application = Application(
+    application_id="com.example.report-cli",
+    goal=ReportGoal(),
+    display_name="report-cli",
+    plugin_policy=PluginPolicy.declared(
+        include={"com.example.shared.audit"},
+    ),
+)
 
 
 def main() -> int:
-    return engulf.run()
+    return application.run()
 ```
 
-The consuming application exposes `main` as its console entry point:
+`application_id` is normalized to lowercase distribution form. Keep it stable: it
+participates in plugin discovery, state paths, and named lease identity.
+
+The `Goal` instance belongs to one application. `Goal.setup()` runs once after
+plugin discovery. Every `invoke()` creates a fresh `Invocation`, context table,
+state manager, diagnostics session, and lifecycle capability set.
+
+## Invocation Lifecycle
+
+One invocation follows this order:
+
+1. Validate arguments and resolve per-invocation logging controls.
+2. Create immutable invocation, context, state, and diagnostics facilities.
+3. Run universal `before_goal` hooks in preprocessing order.
+4. Stop at the first returned `GoalResult`, or call `Goal.achieve()`.
+5. Let the goal dispatch any typed inner phases it defines.
+6. Run `after_goal` middleware in postprocessing order for entered plugins.
+7. Release capabilities, finalize requested workspace destruction, and report unused
+   context writes.
+
+Callback exceptions become `FRAMEWORK_FAILED` results with exit code 70. Goal phase
+exceptions identify the stable `plugin_id`, not a Python class name.
+
+Use `application.invoke(args)` when the typed `GoalResult` matters. Use
+`application.run(args)` for a console entry point.
+
+## Installed Plugin Catalogs
+
+Installed discovery reads entry-point metadata before importing plugin modules. A
+plugin package can publish two kinds of declaration.
+
+### Goal Catalog
+
+Every installed plugin adapter must be registered in its exact goal catalog:
+
+```text
+engulf.plugins.v<PLUGIN_API_MAJOR>.goal.v<GOAL_API_MAJOR>.<normalized_goal_id>
+```
+
+For goal `org.engulf.executable-wrapper` API major 1, the group is:
+
+```text
+engulf.plugins.v1.goal.v1.org_engulf_executable_wrapper
+```
+
+The entry-point name must be the exact stable `plugin_id`:
 
 ```toml
-[project.scripts]
-my-command = "my_package.cli:main"
+[project.entry-points."engulf.plugins.v1.goal.v1.org_engulf_executable_wrapper"]
+"com.example.audit" = "example_audit:plugin"
 ```
 
-An explicit binary path can be supplied instead of a command name. Command names are
-resolved from `PATH` immediately before execution, and Engulf never invokes a shell.
+The group selects goal ID and major before import. After import, Engulf also checks
+the plugin's `GoalRequirement`, required runtime plugin type, and exported
+`plugin_id`.
 
-### Workspace And State Configuration
+### Plugin-Side Application Declaration
 
-Persistent plugin state is centrally stored and keyed by the normalized application
-ID, plugin ID, and scope. By default, the workspace for one `run()` call is the
-canonical current working directory captured at the start of that call. A wrapping
-application can define a different workspace boundary, such as the directory that
-contains a lab topology:
-
-```python
-from pathlib import Path
-
-from engulf import Engulf, StateHomeContext, WorkspaceContext
-
-
-def resolve_workspace(context: WorkspaceContext) -> Path:
-    return context.cwd / "labs" / context.wrapper_args[1]
-
-
-def resolve_state_home(context: StateHomeContext) -> Path:
-    return context.owner_home / ".local" / "state"
-
-
-engulf = Engulf(
-    "real-command",
-    application_id="my-command",
-    workspace_root_resolver=resolve_workspace,
-    state_home_resolver=resolve_state_home,
-)
-```
-
-`WorkspaceContext` contains `application_id`, `binary`, the original `wrapper_args`,
-`mode`, and the captured `cwd`. A relative resolver result is interpreted relative to
-that `cwd`. The resolved workspace must already be a directory; Engulf canonicalizes
-it so aliases through `.` or symbolic links identify the same workspace. The resolver
-is called at most once per call and only when a plugin requests current-workspace
-state.
-
-`StateHomeContext` contains the effective and selected owner UID/GID, owner home, and
-whether Engulf recognized a sudo invocation. Its resolver must return an absolute
-path. Without a resolver, Engulf uses an absolute `XDG_STATE_HOME` or
-`~/.local/state`. When effective root has a valid non-root `SUDO_UID` and a valid
-`SUDO_GID`, Engulf instead uses and owns state as that invoking user and deliberately
-ignores root's `XDG_STATE_HOME`; direct root invocation has separate root-owned state.
-A custom resolver can implement a different system policy.
-
-Both resolvers are application policy, not plugin policy. Keep them stable after
-state has been written. Requesting a handle, checking a missing file, enumerating an
-empty catalog, or destroying an absent namespace does not create storage. Asking for
-a directory/path or writing a file creates the required directories.
-
-## Creating An Installed Plugin
-
-An installed plugin is a normal wheel that depends on `engulf-api` and publishes an
-entry point for one wrapping application. It should not import from `engulf`; runtime
-types used by plugins belong to `engulf_api`.
-
-The following example creates an audit plugin for an application constructed with:
-
-```python
-Engulf("real-command", application_id="my-command")
-```
-
-### 1. Choose The Identifiers
-
-The application ID determines the entry-point group. Engulf normalizes runs of `-`,
-`_`, and `.` to `-`, lowercases the result, and uses `_` in the group suffix:
-
-| Application ID | Normalized ID | Entry-point group |
-| --- | --- | --- |
-| `my-command` | `my-command` | `engulf.plugins.v1.my_command` |
-| `Acme.CLI` | `acme-cli` | `engulf.plugins.v1.acme_cli` |
-
-The `v1` component is `PLUGIN_API_MAJOR`, not the version of the wrapping application
-or plugin. A plugin is considered for discovery only when its group exactly matches
-the wrapping application's group.
-
-Each plugin also needs a globally unique `plugin_id`. Use a lowercase, dot-qualified
-name controlled by the plugin publisher, such as
-`com.example.my_command.audit`. Entry-point names such as `audit` are only package
-labels and do not replace `plugin_id`.
-
-### 2. Create The Package
-
-Create this source layout:
-
-```text
-my-command-audit-plugin/
-|-- pyproject.toml
-`-- src/
-    `-- my_command_audit/
-        |-- __init__.py
-        `-- py.typed
-```
-
-Use this complete `pyproject.toml`:
+A plugin opts into one application by repeating the same ID and target in the
+application group:
 
 ```toml
-[build-system]
-requires = ["hatchling>=1.27"]
-build-backend = "hatchling.build"
-
-[project]
-name = "my-command-audit-plugin"
-version = "0.1.0"
-description = "Audit logging for my-command"
-requires-python = ">=3.14"
-license = "MIT"
-dependencies = [
-    "engulf-api>=1.0,<2",
-    "my-command>=2,<3",
-]
-
-[project.entry-points."engulf.plugins.v1.my_command"]
-audit = "my_command_audit:plugin"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/my_command_audit"]
+[project.entry-points."engulf.plugins.v1.application.com_example_cli"]
+"com.example.audit" = "example_audit:plugin"
 ```
 
-Depending on the wrapping application is recommended when the plugin requires a
-particular application version. Depending directly on `engulf-api` makes the plugin's
-contract compatibility explicit. The upper bound prevents installation with a future
-breaking API major.
+To support multiple applications, add one application-group entry for each. The
+goal-catalog implementation remains single and reusable. An application declaration
+must come from the same distribution, version, and import target as the matching
+goal-catalog entry.
 
-The entry-point value has the form `importable_module:exported_object`. The exported
-object may be a `Plugin` instance or a zero-argument callable that returns one.
-
-### 3. Implement The Plugin
-
-Put the following in `src/my_command_audit/__init__.py`:
+Use the exported helpers to compute exact groups:
 
 ```python
-from pathlib import Path
-
-from engulf_api import (
-    AfterCallEvent,
-    ArgumentRegistry,
-    BeforeCallEvent,
-    Plugin,
-    PluginAPI,
+from engulf import (
+    application_plugin_entry_point_group,
+    goal_plugin_entry_point_group,
 )
 
-_AUDIT_PATH = "com.example.my_command.audit.path"
-
-
-class AuditPlugin(Plugin):
-    plugin_id = "com.example.my_command.audit"
-    priority = 50
-    context_reads = frozenset({_AUDIT_PATH})
-    context_writes = frozenset({_AUDIT_PATH})
-
-    def help(self) -> str:
-        return "  --audit-log PATH   Append the wrapped command's exit code"
-
-    def register_arguments(self, registry: ArgumentRegistry) -> None:
-        registry.option(
-            "--audit-log",
-            takes_value=True,
-            metavar="PATH",
-            description="Append the wrapped command's exit code",
-        )
-
-    def before_call(self, event: BeforeCallEvent, api: PluginAPI) -> None:
-        index = 0
-        while index < len(event.wrapper_args):
-            argument = event.wrapper_args[index]
-            if argument.startswith("--audit-log="):
-                path = argument.partition("=")[2]
-                if not path:
-                    api.preempt(2)
-                    return
-                api.remove(index)
-                api.set_context(_AUDIT_PATH, path)
-            elif argument == "--audit-log":
-                if index + 1 >= len(event.wrapper_args):
-                    api.preempt(2)
-                    return
-                api.remove_range(index, index + 2)
-                api.set_context(_AUDIT_PATH, event.wrapper_args[index + 1])
-                index += 1
-            index += 1
-
-    def after_call(self, event: AfterCallEvent, api: PluginAPI) -> None:
-        path = api.get_context(_AUDIT_PATH)
-        if isinstance(path, str):
-            with Path(path).open("a", encoding="utf-8") as stream:
-                stream.write(f"{event.outcome.exit_code}\n")
-
-
-plugin = AuditPlugin()
+print(application_plugin_entry_point_group("com.example.cli"))
+print(goal_plugin_entry_point_group("org.engulf.executable-wrapper", 1))
 ```
 
-Create an empty `src/my_command_audit/py.typed` file so type checkers recognize the
-installed package as typed.
+## Application-Side Activation Policies
 
-This plugin declares `--audit-log` for completion, removes it before the wrapped
-binary runs, stores its value in call-scoped context, and reads that value in
-postprocessing. `api.preempt(2)` handles a missing value without launching the binary.
-Argument removal is deferred, so every plugin still sees the original
-`event.wrapper_args` tuple.
-
-### 4. Build And Install It
-
-From the plugin project directory, create an isolated environment and build both the
-wheel and source distribution:
-
-```console
-python3.14 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip build
-python -m build
-```
-
-The build produces files similar to:
-
-```text
-dist/my_command_audit_plugin-0.1.0-py3-none-any.whl
-dist/my_command_audit_plugin-0.1.0.tar.gz
-```
-
-Install the wrapping application first if it is not already installed, then install
-the wheel:
-
-```console
-python -m pip install my-command
-python -m pip install --force-reinstall \
-    dist/my_command_audit_plugin-0.1.0-py3-none-any.whl
-```
-
-Do not use `--no-deps` for a production installation: package dependencies are how
-the required API, wrapping application, and any dependent plugin wheels are installed.
-
-### 5. Verify Discovery
-
-Run this in the same environment. Constructing `Engulf` discovers and validates
-plugins but does not execute the wrapped binary:
-
-```console
-python - <<'PY'
-from engulf import Engulf
-
-application = Engulf("real-command", application_id="my-command")
-print(application.plugin_entry_point_group)
-print([plugin.plugin_id for plugin in application.plugins])
-PY
-```
-
-The output must include:
-
-```text
-engulf.plugins.v1.my_command
-['com.example.my_command.audit']
-```
-
-Other plugins installed for the same application may also appear in the list. Run
-`my-command --help` to verify that the wrapped binary's help is followed by the
-plugin's `--audit-log` help block.
-
-If the plugin is absent, check all of these values:
-
-- The wrapper's `application_id` and the entry-point group suffix match after
-  normalization.
-- The entry point uses the current API major, currently `v1`.
-- The entry-point module and exported object are importable in the wrapper's Python
-  environment.
-- The exported instance or factory result subclasses `engulf_api.Plugin`.
-- `plugin_id` is lowercase, dot-qualified, and unique among active plugins.
-- The installed `engulf-api` version satisfies both the plugin and runtime ranges.
-
-Installed plugins are discovered in deterministic distribution-name,
-entry-point-name, and object-reference order before dependency and priority ordering.
-Discovery can be disabled with `discover_installed=False`.
-
-Entry points are declarations, not a security boundary. Installing and activating a
-plugin permits it to execute Python code in the wrapping application's process.
-
-### Plugin Contract Reference
-
-| Member | Requirement | Purpose |
-| --- | --- | --- |
-| `plugin_id` | Required | Globally identifies the active plugin. |
-| `help()` | Required | Returns the plugin-specific help block as a string. |
-| `priority` | Optional, default `50` | Breaks ties among dependency-ready plugins. |
-| `plugin_dependencies` | Optional, default `()` | Requires and orders other active plugins. |
-| `context_reads` | Optional, default empty | Declares context IDs the plugin may read. |
-| `context_writes` | Optional, default empty | Declares context IDs the plugin may write. |
-| `register_arguments()` | Optional | Declares wrapper options used by completion. |
-| `register_completions()` | Optional | Adds static or dynamic completion candidates. |
-| `before_call(event, api)` | Optional | Inspects original arguments, edits the effective call, shares context, or preempts. |
-| `after_call(event, api)` | Optional | Observes the outcome and accesses shared context. |
-| `api.state(scope)` | During either hook | Accesses this plugin's persistent user or current-workspace files. |
-| `api.known_workspaces()` | During either hook | Enumerates workspace state owned by this plugin. |
-
-## Local Plugins
-
-An application may additionally point to a local plugin directory:
+Technical goal compatibility is always mandatory. Within that compatible catalog,
+the application selects one policy:
 
 ```python
-from pathlib import Path
+# Either the plugin names this app or the app includes the ID.
+PluginPolicy.declared(include={"com.example.audit"})
 
-from engulf import Engulf
+# Ignore plugin-side app declarations; activate only these named IDs.
+PluginPolicy.allow_only({"com.example.audit"})
 
-
-engulf = Engulf(
-    "real-command",
-    application_id="my-command",
-    plugin_dir=Path(__file__).with_name("plugins"),
+# Also activate their transitive PluginDependency targets.
+PluginPolicy.allow_only(
+    {"com.example.audit"},
+    include_dependencies=True,
 )
+
+# Activate every goal-compatible installed plugin except these IDs.
+PluginPolicy.allow_all_except({"com.example.unsafe"})
 ```
 
-Each non-private, immediate `*.py` file must export `plugin` using the same instance or
-factory contract. Private `_*.py` modules may be imported as helpers. Local files are
-discovered in lexical filename order before installed plugins. The directory is
-optional but must exist when supplied.
+Explicit IDs are optional: an ID absent from the current goal catalog is skipped and
+listed by `application.missing_policy_ids`. This supports optional installations.
+By default, every dependency of an allowlisted plugin must also be explicitly
+allowlisted. Set `include_dependencies=True` to activate reachable
+`PluginDependency` targets recursively from the same goal catalog or plugin
+directory. Dependencies that are unavailable still fail application construction.
+Implicit dependencies do not need plugin-side application declarations because the
+application's allowlist selected them, but exact goal ID, goal API major, and runtime
+plugin type checks still apply.
+The option is valid only for `allow_only()`; declared and blocklist policies already
+define their complete candidate sets.
 
-Import errors, missing or invalid exports, duplicate installed entry points, and
-factory failures raise `PluginLoadError` during `Engulf` construction. Invalid plugin
-metadata, duplicate plugin IDs, missing hard dependencies, and dependency cycles raise
-`PluginDependencyError` before registration starts.
+Catalog IDs are validated and deduplicated before any selected target is imported.
+An unselected goal-catalog entry is not imported. Blocklist mode deliberately
+selects and imports every compatible catalog entry not blocked.
 
-## Plugin Call Model
+## Local Plugin Directory
 
-Every plugin must define a globally unique, lowercase, dot-qualified `plugin_id`, such
-as `com.example.my_command.audit`. After discovery, Engulf snapshots and validates all
-plugin metadata, then computes independent preprocess and postprocess topological
-orders. Among graph nodes currently ready to run, higher integer `priority` runs
-first; the neutral default is `50`, and ties preserve discovery order.
+`plugin_dir` supports application-owned development plugins. Every immediate,
+non-private `*.py` file must export `plugin` as an instance or zero-argument factory.
+Private helper modules remain importable. Files load in lexical order.
 
-Argument and completion registration, help output, preemption precedence, and the
-public `Engulf.plugins` tuple use preprocess order. `Engulf.postprocess_plugins`
-exposes postprocess order. Plugins cannot inspect argument edits made by another
-plugin. Each before-hook receives an immutable `BeforeCallEvent` and a private,
-call-scoped `PluginAPI` view.
+Supplying a directory is itself an application-side declaration, so declared mode
+activates all technically compatible directory plugins. Allowlist and blocklist
+filter directory plugins by their exported IDs after import. Directory code cannot
+be filtered before import because it has no installed metadata catalog.
 
-- `remove(index)` and `remove_range(start, stop)` refer to indexes in the original
-  wrapper argument tuple. All removals are unioned after every plugin has run.
-- `add(*args, placement=...)` records one atomic group. Exact duplicate groups are
-  emitted once, and the first request chooses their placement.
-- Placements are `PREPEND`, `BEFORE_SEPARATOR` (the default), and `APPEND`.
-- `preempt(code)` skips the binary. The first nonzero code wins; a zero code is used
-  only when no plugin supplied a nonzero code.
+## Dependencies And Ordering
 
-All before-hooks continue after a structured preemption. Every plugin then receives an
-`AfterCallEvent` describing execution, preemption, a signal, or a spawn failure.
-After-hooks are observers and cannot change the selected exit code.
+Engulf resolves two deterministic topological orders:
 
-## Dependencies And Shared Context
+- preprocessing for outer before hooks and goal phases that choose `PREPROCESS`;
+- postprocessing for outer after hooks and goal phases that choose `POSTPROCESS`.
 
-A plugin wheel uses normal package dependencies to install another plugin wheel, and
-uses `PluginDependency` to require that plugin to be active and constrain lifecycle
-order:
+`PluginDependency` expresses presence and independent edges for both orders.
+Priority defaults to 50 and breaks ties only among currently ready nodes. Higher
+priority runs first. Duplicate IDs, missing dependencies, self-dependencies, repeated
+dependency declarations, and cycles are startup errors.
 
-```toml
-[project]
-dependencies = [
-    "engulf-api>=1.0,<2",
-    "my-command-identity-plugin>=1,<2",
-]
-```
+Package dependencies in a plugin wheel make another wheel available; they do not
+activate its plugin entry point. Both adapters must still be selected by application
+policy, either explicitly or through `allow_only(..., include_dependencies=True)`.
+Implicit activation follows Engulf `PluginDependency` metadata, not Python package
+dependency metadata.
+
+## Elevation
+
+Plugins declare one `ElevationRequirement`: `NONE`, `OPTIONAL`, or `REQUIRED`.
+Required elevation is validated after discovery and ordering but before goal setup
+or any plugin registration callback. A selected required plugin in an unprivileged
+process raises `PluginElevationError`; Engulf does not elevate or restart itself.
+
+Optional plugins remain active without elevation and can degrade deliberately:
 
 ```python
-from engulf_api import DependencyPosition, Plugin, PluginDependency
+from engulf_api import ElevationRequirement
 
 
-class AuditPlugin(Plugin):
-    plugin_id = "com.example.my_command.audit"
-    plugin_dependencies = (
-        PluginDependency(
-            "com.example.my_command.identity",
-            preprocess=DependencyPosition.BEFORE,
-            postprocess=DependencyPosition.AFTER,
-        ),
-    )
+class NetworkPlugin(MyGoalPlugin):
+    elevation_requirement = ElevationRequirement.OPTIONAL
 
-    def help(self) -> str:
-        return ""
+    def before_goal(self, invocation, api):
+        if api.elevated:
+            configure_system_networking()
 ```
 
-`BEFORE` and `AFTER` describe the dependency's position relative to the declaring
-plugin. The defaults shown above produce middleware order: identity before audit in
-preprocessing, then audit before identity in postprocessing. Set either phase to
-`None` to omit only that ordering constraint. Hard presence is still checked. Each
-phase has its own cycle validation.
+`api.elevated` is available during registration and invocation callbacks and is
+callback-bound like the other capabilities. `Application.elevated` exposes the same
+process snapshot to application code. On POSIX elevation means effective UID zero;
+on Windows it means an elevated process token.
 
-One initially empty context table lives for the entire `Engulf.run()` call. Plugins
-declare context capabilities and use their scoped API during either hook:
+## Logging
+
+Each registration and invocation callback receives `api.logger`, already configured
+for that plugin. The logger intentionally omits handler and level mutation methods.
+It is valid only during the active callback.
 
 ```python
-class IdentityPlugin(Plugin):
-    plugin_id = "com.example.my_command.identity"
-    context_writes = frozenset({"com.example.my_command.principal"})
-
-    def help(self) -> str:
-        return ""
-
-    def before_call(self, event, api) -> None:
-        api.set_context("com.example.my_command.principal", "alice")
-
-
-class AuditPlugin(Plugin):
-    plugin_id = "com.example.my_command.audit"
-    context_reads = frozenset({"com.example.my_command.principal"})
-
-    def help(self) -> str:
-        return ""
-
-    def after_call(self, event, api) -> None:
-        principal = api.require_context("com.example.my_command.principal")
+def before_goal(self, invocation, api):
+    api.logger.debug("checking %d arguments", len(invocation.arguments))
 ```
 
-Reads and writes outside a plugin's declarations fail. Multiple writers are allowed;
-later writes overwrite earlier values. `get_context(id, default)` returns the default
-when absent, while `require_context(id)` raises `MissingContextError`. Only reading an
-existing value counts as a read. At call completion, Engulf emits one filterable
-`UnusedContextWarning` containing the sorted IDs written but never read; it does not
-change the exit code. The table is discarded after each call.
-
-## Persistent Plugin State
-
-Call context is appropriate for one `Engulf.run()` invocation. Use persistent state
-when data written by one command must be read by a later command, such as recording a
-lab during `deploy` and consuming that record during `destroy`.
-
-```python
-from engulf_api import Plugin, StateScope
-
-
-class LabStatePlugin(Plugin):
-    plugin_id = "com.example.my_command.lab_state"
-
-    def help(self) -> str:
-        return ""
-
-    def before_call(self, event, api) -> None:
-        if event.wrapper_args[:1] == ("deploy",):
-            workspace = api.state(StateScope.WORKSPACE)
-            workspace.write_text("deployment-id", "lab-123")
-        elif event.wrapper_args[:2] == ("destroy", "--all"):
-            for known_workspace in api.known_workspaces():
-                deployment_id = known_workspace.read_text("deployment-id")
-                # Perform application-specific cleanup with deployment_id here.
-                known_workspace.destroy()
-
-
-plugin = LabStatePlugin
-```
-
-The two explicit scopes are:
-
-- `StateScope.WORKSPACE`: state associated with the current canonical workspace.
-  The central catalog makes it discoverable from another directory and from a later
-  process.
-- `StateScope.USER`: application-wide state for the current plugin and selected user.
-  Use this for preferences or indexes that do not belong to one workspace.
-
-There is no combined scope. A plugin that needs both calls `api.state()` twice. Each
-store provides `directory`, `path(filename)`, `exists`, `read_bytes`, `read_text`,
-`write_bytes`, `write_text`, and `delete`. Managed filenames must be one nonempty path
-component. Managed writes are atomic; Engulf creates managed directories with mode
-`0700` and files with mode `0600`. `directory` and `path()` expose `Path` objects for
-libraries that require filesystem paths, but operations performed directly through
-those paths bypass Engulf's atomic-write, locking, and ownership handling.
-
-Workspace state is stored centrally under this logical layout (the workspace key is
-the SHA-256 digest of its canonical absolute path):
+Applications configure defaults with `LoggingConfig` and can override levels per
+invocation with `LogLevelOverrides`. Every application reserves:
 
 ```text
-<state-home>/<application-id>/
-|-- user/<plugin-id>/
-|-- workspaces/<workspace-key>/
-|   |-- workspace.json
-|   `-- plugins/<plugin-id>/
-`-- .catalog.lock
+--<display-name>-log-level LEVEL
+--<display-name>-plugin-log-level PLUGIN_ID=LEVEL
 ```
 
-`api.known_workspaces()` returns only records containing the calling plugin's
-namespace. A plugin cannot enumerate another plugin's records through this API. The
-recorded `WorkspaceState.root` can point to a directory that has since been moved or
-deleted; this is intentional so global cleanup can still find stale state. Moving a
-workspace creates a new identity and does not silently migrate the old record.
+Controls before `--` are removed from the goal's arguments. Controls after `--` are
+left untouched. Registration logging uses the initialized setup diagnostics session;
+catalog candidates that are never activated are never imported and therefore cannot
+log.
 
-`WorkspaceState.destroy()` queues deletion of only the calling plugin's namespace.
-Deletion is idempotent and deferred until postprocessing finishes, so state remains
-readable in subsequent reachable hooks. When the final plugin namespace is removed,
-Engulf removes the complete hashed workspace record. Every queued cleanup is attempted
-even if another cleanup fails, and any cleanup failure selects framework exit code
-`70`. Cleanup still commits after a nonzero binary result or plugin-hook failure. A
-process crash before finalization may leave state for a later cleanup attempt.
+## State And Workspaces
 
-State handles, like `PluginAPI`, can be used only while that plugin's lifecycle hook is
-active. The directories isolate names and prevent accidental cross-plugin state
-access; they are not a security sandbox. Plugins are trusted Python code and can use
-ordinary filesystem APIs outside this interface.
-
-Any exact `--help` argument enters help mode. Plugin hooks still receive events, but
-their edits and preemptions are ignored. The original arguments are passed to the
-binary, followed by each plugin's nonempty `help()` block.
-
-Plugin hook exceptions are programming failures. A before-hook exception stops the
-before phase and skips execution; an after-hook exception stops the after phase. Engulf
-returns exit code 70 for either case. Missing and non-executable binaries return 127 and
-126 respectively, and signal exits are normalized to `128 + signal`.
-
-## Completion Metadata
-
-Argument declarations are used only for completion. They do not parse, validate,
-remove, or otherwise change runtime arguments.
+Plugins and the goal receive sandboxed user and workspace stores:
 
 ```python
-from engulf_api import CompletionCandidate, Plugin
+from engulf_api import StateScope
 
-
-class EnvironmentPlugin(Plugin):
-    plugin_id = "com.example.my_command.environment"
-
-    def help(self) -> str:
-        return "  --environment NAME   Select an environment"
-
-    def register_arguments(self, registry) -> None:
-        registry.option(
-            "--environment",
-            takes_value=True,
-            metavar="NAME",
-            description="Select an environment",
-            value_completer=lambda context: [
-                CompletionCandidate("development"),
-                CompletionCandidate("production"),
-            ],
-        )
-
-
-plugin = EnvironmentPlugin
+user = api.state(StateScope.USER)
+workspace = api.state(StateScope.WORKSPACE)
+user.write_text("settings.json", data)
+workspace.write_bytes("artifact", payload)
 ```
 
-Plugins may also use `register_completions()` to add literal candidates or dynamic
-providers. An `Engulf`-level `completion_provider` supplies reliable wrapped-binary
-candidates when no compatible native shell completion is loaded.
+One filename is one path component. Reads reject symbolic links and Windows reparse
+points. Writes are atomic, private, and owner-aware. Calling `directory` or `path()`
+exposes the sandboxed directory so plugins can clone repositories or manage
+directory trees inside their own namespace. `delete()` removes a named file or tree.
+`WorkspaceState.destroy()` queues namespace destruction after postprocessing; an
+empty workspace record is pruned.
 
-## Bash And Zsh
+On POSIX, the default state home follows `XDG_STATE_HOME` or `~/.local/state`. Under
+a valid sudo invocation, state uses the invoking non-root user's home and ownership.
+On Windows, it uses `%LOCALAPPDATA%\Engulf\State`, the process-token user SID,
+protected owner/SYSTEM/Administrators DACLs, and non-inheritable `LockFileEx`
+handles. POSIX uses private modes, ownership, no-follow opens, and `flock`.
 
-Install the wrapping application first, then generate its completion script:
+`StateHomeResolver` and `WorkspaceRootResolver` are application policy and receive
+stable context records. `StateHomeContext` exposes `application_id`, a
+platform-qualified `owner_id`, `owner_home`, and whether the process is elevated;
+it does not expose platform-specific UID/GID or sudo fields.
 
-```console
-engulf-completion bash my-command > my-command.bash
-engulf-completion zsh my-command > _my-command
+## Transactions And Leases
+
+Atomic file replacement does not serialize read-modify-write sequences:
+
+```python
+with user.transaction(timeout=5) as locked:
+    value = int(locked.read_text("counter"))
+    locked.write_text("counter", str(value + 1))
 ```
 
-For Bash, source the wrapped binary's completion first and then source the generated
-file. For Zsh, put `_my-command` in a directory on `fpath` before running `compinit`, or
-source it after `compinit`.
+Transactions serialize; they do not roll back. Ordinary reads take shared store
+locks, writes take exclusive locks, and workspace destruction waits for the affected
+store lock.
 
-System packages can place generated files in:
+Named leases coordinate external resources across cooperating Engulf processes that
+share state owner/home and application ID:
 
-- `/usr/share/bash-completion/completions/my-command`
-- `/usr/share/zsh/site-functions/_my-command`
+```python
+with api.leases((f"docker-image:{image}", f"builder:{builder.resolve()}")):
+    build_image()
+    with user.transaction() as locked:
+        save_fingerprint(locked)
+```
 
-The wheel intentionally does not write to those system-owned directories.
+Lease identity excludes plugin ID, so different plugins contend on the same exact
+name. Acquire leases before state transactions. Acquiring a lease from inside a
+transaction is rejected; nested leases and transactions are also rejected. Lock
+files persist to avoid file-replacement races and use non-inheritable advisory-lock
+handles.
+
+Leases coordinate only cooperating Engulf processes. External resources still need
+ownership markers and recovery journals.

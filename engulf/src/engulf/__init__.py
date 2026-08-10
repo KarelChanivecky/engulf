@@ -1,8 +1,19 @@
-from .completion import render_completion_script
+from .application import FRAMEWORK_ERROR_EXIT, Application
+from .diagnostics import (
+    LOG_LEVEL_NAMES,
+    LoggingConfig,
+    LogLevel,
+    LogLevelOverrides,
+    logging_option_names,
+)
 from .plugin_loader import (
     PluginDependencyError,
+    PluginElevationError,
     PluginLoadError,
-    plugin_entry_point_group,
+    PluginPolicy,
+    PluginPolicyMode,
+    application_plugin_entry_point_group,
+    goal_plugin_entry_point_group,
 )
 from .state import (
     StateHomeContext,
@@ -10,17 +21,24 @@ from .state import (
     WorkspaceContext,
     WorkspaceRootResolver,
 )
-from .wrapper import FRAMEWORK_ERROR_EXIT, Engulf
 
 __all__ = [
     "FRAMEWORK_ERROR_EXIT",
-    "Engulf",
+    "LOG_LEVEL_NAMES",
+    "Application",
+    "LogLevel",
+    "LogLevelOverrides",
+    "LoggingConfig",
     "PluginDependencyError",
+    "PluginElevationError",
     "PluginLoadError",
+    "PluginPolicy",
+    "PluginPolicyMode",
     "StateHomeContext",
     "StateHomeResolver",
     "WorkspaceContext",
     "WorkspaceRootResolver",
-    "plugin_entry_point_group",
-    "render_completion_script",
+    "application_plugin_entry_point_group",
+    "goal_plugin_entry_point_group",
+    "logging_option_names",
 ]

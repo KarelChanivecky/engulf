@@ -1,8 +1,30 @@
+[dependency-groups]
+dev = [
+    "build>=1.5,<2",
+    "cryptography>=45",
+    "hatchling>=1.31,<2",
+    "mypy>=2.3,<3",
+    "ruff>=0.16,<1",
+    "twine>=7,<8",
+]
+
 [tool.ruff]
 target-version = "py314"
 
 [tool.mypy]
 python_version = "3.14"
 strict = true
-mypy_path = ["engulf-api/src", "engulf/src"]
-files = ["engulf-api/src/engulf_api", "engulf/src/engulf"]
+mypy_path = [
+    "engulf-api/src",
+    "engulf/src",
+    "engulf-executable-wrapper-api/src",
+    "engulf-executable-wrapper/src",
+    "examples/encryption-app/src",
+]
+files = [
+    "engulf-api/src/engulf_api",
+    "engulf/src/engulf",
+    "engulf-executable-wrapper-api/src/engulf_executable_wrapper_api",
+    "engulf-executable-wrapper/src/engulf_executable_wrapper",
+    "examples/encryption-app/src/engulf_encryption_example",
+]

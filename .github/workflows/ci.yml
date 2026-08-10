@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Install development and local packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group dev
+          python -m pip install --no-deps -e engulf-api -e engulf -e engulf-executable-wrapper-api -e examples/encryption-app
+      - name: Test framework contracts and runtime
+        run: |
+          python -m unittest discover -s engulf-api/tests -v
+          python -m unittest discover -s engulf-executable-wrapper-api/tests -v
+          python -m unittest discover -s engulf/tests -v
+      - name: Exercise the platform-independent goal
+        run: python -m engulf_encryption_example generate-key engulf-ci.key
+
+  executable-wrapper:
+    name: Executable wrapper (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Install development and local packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group dev
+          python -m pip install --no-deps -e engulf-api -e engulf -e engulf-executable-wrapper-api -e engulf-executable-wrapper
+      - name: Test executable-wrapper runtime
+        run: python -m unittest discover -s engulf-executable-wrapper/tests -v
+
+  quality:
+    name: Static analysis and builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Install development tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --group dev
+      - name: Check formatting, lint, and types
+        run: |
+          python -m ruff check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper examples
+          python -m ruff format --check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper examples
+          python -m mypy
+      - name: Build distributions
+        run: |
+          python -m build --outdir build-artifacts/engulf-api engulf-api
+          python -m build --outdir build-artifacts/engulf engulf
+          python -m build --outdir build-artifacts/executable-wrapper-api engulf-executable-wrapper-api
+          python -m build --outdir build-artifacts/executable-wrapper engulf-executable-wrapper
+          python -m build --outdir build-artifacts/encryption-example examples/encryption-app
+          python -m twine check build-artifacts/*/*

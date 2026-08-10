@@ -1,32 +1,50 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
+from typing import get_type_hints
 
+import engulf_api
 from engulf_api import (
     PLUGIN_API_MAJOR,
     PLUGIN_API_VERSION,
-    ArgumentRegistry,
-    CompletionCandidate,
-    CompletionContext,
-    CompletionRegistry,
+    AfterGoalAPI,
+    AttributedContribution,
+    BeforeGoalAPI,
     DependencyPosition,
+    DiagnosticsAPI,
+    ElevationRequirement,
+    Goal,
+    GoalAPI,
+    GoalContract,
+    GoalPhase,
+    GoalRequirement,
+    GoalResult,
+    GoalResultStatus,
+    GoalSetupAPI,
+    Invocation,
+    InvocationAPI,
+    LockTimeoutError,
     Plugin,
-    PluginAPI,
     PluginDependency,
-    Shell,
+    PluginLogger,
+    PluginOrder,
+    RegistrationAPI,
     StateCatalogError,
     StateScope,
     StateStore,
     WorkspaceState,
+    validate_exit_code,
     validate_global_identifier,
 )
+
+REQUIREMENT = GoalRequirement("tests.api.goal", 1)
 
 
 class ExamplePlugin(Plugin):
     plugin_id = "tests.api.example"
-
-    def help(self) -> str:
-        return "example"
+    goal_requirement = REQUIREMENT
 
 
 class ApiTestCase(unittest.TestCase):
@@ -34,27 +52,33 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(PLUGIN_API_MAJOR, 1)
         self.assertEqual(PLUGIN_API_VERSION, "1.0.0")
 
-    def test_plugin_priority_defaults_to_fifty_and_can_be_overridden(self) -> None:
+    def test_plugin_metadata_defaults_and_priority(self) -> None:
         class EarlierPlugin(ExamplePlugin):
             priority = 25
 
-        self.assertEqual(ExamplePlugin().priority, 50)
-        self.assertEqual(EarlierPlugin().priority, 25)
+        class OptionalElevationPlugin(ExamplePlugin):
+            elevation_requirement = ElevationRequirement.OPTIONAL
 
-    def test_plugin_requires_help_implementation(self) -> None:
-        class IncompletePlugin(Plugin):
-            pass
-
-        with self.assertRaises(TypeError):
-            IncompletePlugin()
-        self.assertEqual(ExamplePlugin().help(), "example")
-
-    def test_plugin_metadata_defaults(self) -> None:
         plugin = ExamplePlugin()
-
+        self.assertEqual(plugin.priority, 50)
+        self.assertEqual(EarlierPlugin().priority, 25)
+        self.assertIs(plugin.elevation_requirement, ElevationRequirement.NONE)
+        self.assertIs(
+            OptionalElevationPlugin().elevation_requirement,
+            ElevationRequirement.OPTIONAL,
+        )
+        self.assertEqual(
+            tuple(ElevationRequirement),
+            (
+                ElevationRequirement.NONE,
+                ElevationRequirement.OPTIONAL,
+                ElevationRequirement.REQUIRED,
+            ),
+        )
         self.assertEqual(plugin.plugin_dependencies, ())
         self.assertEqual(plugin.context_reads, frozenset())
         self.assertEqual(plugin.context_writes, frozenset())
+        self.assertEqual(plugin.goal_requirement, REQUIREMENT)
 
     def test_dependency_defaults_form_middleware_order(self) -> None:
         dependency = PluginDependency("com.example.required")
@@ -71,49 +95,117 @@ class ApiTestCase(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 validate_global_identifier(invalid, label="value")
 
-    def test_plugin_api_is_abstract(self) -> None:
+    def test_exit_codes_are_exact_bytes(self) -> None:
+        self.assertEqual(validate_exit_code(0), 0)
+        self.assertEqual(validate_exit_code(255), 255)
+        for invalid in (True, False, -1, 256, "0", 1.0, None):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validate_exit_code(invalid)
+
+    def test_goal_contract_result_and_invocation_models(self) -> None:
+        contract = GoalContract(REQUIREMENT, ExamplePlugin)
+        self.assertEqual(contract.goal_id, "tests.api.goal")
+        self.assertEqual(contract.api_major, 1)
+        self.assertIs(contract.plugin_type, ExamplePlugin)
+
+        completed = GoalResult.completed("value", exit_code=4)
+        rejected = GoalResult.rejected(
+            9,
+            rejected_by="tests.api.example",
+        )
+        self.assertIs(completed.status, GoalResultStatus.COMPLETED)
+        self.assertEqual(completed.value, "value")
+        self.assertIs(rejected.status, GoalResultStatus.REJECTED)
+        self.assertEqual(rejected.rejected_by, "tests.api.example")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            invocation = Invocation(
+                ("one",),
+                Path(temporary).resolve(),
+                {"KEY": "value"},
+            )
+        self.assertEqual(invocation.arguments, ("one",))
         with self.assertRaises(TypeError):
-            PluginAPI()
+            invocation.environment["OTHER"] = "value"  # type: ignore[index]
+
+    def test_goal_phases_are_typed_attributed_and_two_ordered(self) -> None:
+        phase = GoalPhase(
+            "tests.api.phase",
+            PluginOrder.PREPROCESS,
+            lambda plugin, event, api: event,
+            str,
+        )
+        contribution = AttributedContribution("tests.api.example", "value")
+        self.assertIs(phase.order, PluginOrder.PREPROCESS)
+        self.assertEqual(contribution.value, "value")
+        self.assertEqual(
+            tuple(PluginOrder),
+            (PluginOrder.PREPROCESS, PluginOrder.POSTPROCESS),
+        )
+
+    def test_lifecycle_apis_expose_only_generic_capabilities(self) -> None:
+        for api_type in (
+            DiagnosticsAPI,
+            RegistrationAPI,
+            InvocationAPI,
+            BeforeGoalAPI,
+            AfterGoalAPI,
+            GoalSetupAPI,
+            GoalAPI,
+        ):
+            with self.subTest(api_type=api_type.__name__), self.assertRaises(TypeError):
+                api_type()
+
+        common = {
+            "elevated",
+            "lease",
+            "leases",
+            "get_context",
+            "require_context",
+            "set_context",
+            "state",
+            "known_workspaces",
+            "logger",
+        }
+        self.assertTrue(common <= InvocationAPI.__abstractmethods__)
+        self.assertTrue(common <= BeforeGoalAPI.__abstractmethods__)
+        self.assertTrue(common <= AfterGoalAPI.__abstractmethods__)
+        self.assertIn("elevated", RegistrationAPI.__abstractmethods__)
+        for wrapper_method in ("remove", "remove_range", "add", "preempt"):
+            self.assertFalse(hasattr(InvocationAPI, wrapper_method))
+            self.assertFalse(hasattr(AfterGoalAPI, wrapper_method))
+
+        self.assertIs(get_type_hints(Plugin.before_goal)["api"], BeforeGoalAPI)
+        self.assertIs(get_type_hints(Plugin.after_goal)["api"], AfterGoalAPI)
+        self.assertFalse(hasattr(PluginLogger, "setLevel"))
+        self.assertFalse(hasattr(PluginLogger, "addHandler"))
+
+    def test_goal_is_abstract(self) -> None:
+        with self.assertRaises(TypeError):
+            Goal()  # type: ignore[abstract]
 
     def test_state_contract_is_public_and_abstract(self) -> None:
         self.assertEqual(
             tuple(StateScope),
             (StateScope.WORKSPACE, StateScope.USER),
         )
-        self.assertEqual(StateScope.WORKSPACE.value, "workspace")
-        self.assertEqual(StateScope.USER.value, "user")
         with self.assertRaises(TypeError):
             StateStore()
         with self.assertRaises(TypeError):
             WorkspaceState()
         self.assertTrue(issubclass(StateCatalogError, RuntimeError))
-        self.assertIn("state", PluginAPI.__abstractmethods__)
-        self.assertIn("known_workspaces", PluginAPI.__abstractmethods__)
+        self.assertTrue(issubclass(LockTimeoutError, TimeoutError))
+        self.assertIn("transaction", StateStore.__abstractmethods__)
 
-    def test_argument_registry_rejects_duplicate_options(self) -> None:
-        registry = ArgumentRegistry()
-        registry.option("--one")
-
-        with self.assertRaisesRegex(ValueError, "already registered"):
-            registry.option("--one")
-
-    def test_completion_registry_accepts_candidates_and_providers(self) -> None:
-        registry = CompletionRegistry()
-        registry.candidate("--static")
-        registry.provider(lambda context: [CompletionCandidate("--dynamic")])
-        context = CompletionContext(
-            Shell.BASH,
-            "example",
-            "binary",
-            ("--",),
-            0,
-        )
-
-        self.assertEqual(
-            [candidate.value for candidate in registry.static_candidates(context)],
-            ["--static"],
-        )
-        self.assertEqual(len(registry.providers), 1)
+    def test_core_does_not_export_executable_wrapper_types(self) -> None:
+        for name in (
+            "AdditionPlacement",
+            "BeforeCallEvent",
+            "CallOutcome",
+            "CompletionRegistry",
+            "ExecutableWrapperPlugin",
+        ):
+            self.assertFalse(hasattr(engulf_api, name))
 
 
 if __name__ == "__main__":

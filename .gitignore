@@ -4,7 +4,10 @@ __pycache__/
 .coverage
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 .venv/
 build/
 dist/
-
+/.codex/
+/.claude/
+/.agents/

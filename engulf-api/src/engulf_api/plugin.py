@@ -1,22 +1,38 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
+from enum import StrEnum
 
 from .dependencies import PluginDependency
-from .models import AfterCallEvent, BeforeCallEvent
-from .plugin_api import PluginAPI
-from .registry import ArgumentRegistry, CompletionRegistry
+from .goals import GoalRequirement, GoalResult, Invocation
+from .plugin_api import AfterGoalAPI, BeforeGoalAPI
+
+
+class ElevationRequirement(StrEnum):
+    """How a plugin uses operating-system elevation."""
+
+    NONE = "none"
+    OPTIONAL = "optional"
+    REQUIRED = "required"
 
 
 class Plugin(ABC):
+    """Base contract shared by every goal-specific plugin adapter."""
+
     plugin_id: str = ""
     """Globally unique, dot-qualified identifier for this plugin."""
+
+    goal_requirement: GoalRequirement
+    """Goal ID and API major implemented by this plugin adapter."""
 
     priority: int = 50
     """Activation priority. Higher values activate before lower values."""
 
+    elevation_requirement: ElevationRequirement = ElevationRequirement.NONE
+    """Whether this plugin can or must run with elevated privileges."""
+
     plugin_dependencies: tuple[PluginDependency, ...] = ()
-    """Hard dependencies and their phase-specific ordering constraints."""
+    """Hard dependencies and their independent two-order constraints."""
 
     context_reads: frozenset[str] = frozenset()
     """Context identifiers this plugin may read."""
@@ -24,21 +40,22 @@ class Plugin(ABC):
     context_writes: frozenset[str] = frozenset()
     """Context identifiers this plugin may create or overwrite."""
 
-    @abstractmethod
-    def help(self) -> str:
-        """Return the plugin-specific help block."""
+    def before_goal(
+        self,
+        invocation: Invocation,
+        api: BeforeGoalAPI,
+    ) -> GoalResult[object] | None:
+        """Optionally reject or short-circuit an invocation before its goal."""
+        return None
 
-    def register_arguments(self, registry: ArgumentRegistry) -> None:
-        """Register wrapper argument metadata used by completion."""
-
-    def register_completions(self, registry: CompletionRegistry) -> None:
-        """Register static or dynamic completion candidates."""
-
-    def before_call(self, event: BeforeCallEvent, api: PluginAPI) -> None:
-        """Inspect a call and use preprocessing capabilities."""
-
-    def after_call(self, event: AfterCallEvent, api: PluginAPI) -> None:
-        """Observe a completed, preempted, or failed call."""
+    def after_goal(
+        self,
+        invocation: Invocation,
+        result: GoalResult[object],
+        api: AfterGoalAPI,
+    ) -> GoalResult[object]:
+        """Observe or transform the result as ordered middleware."""
+        return result
 
 
 def plugin_name(plugin: Plugin) -> str:

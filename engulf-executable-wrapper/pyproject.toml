@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "engulf-executable-wrapper"
+version = "0.1.0"
+description = "Executable-wrapper goal for the Engulf plugin framework"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+keywords = ["cli", "wrapper", "plugins", "completion"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "engulf>=0.1,<1",
+    "engulf-executable-wrapper-api>=1.0,<2",
+]
+
+[project.scripts]
+engulf-completion = "engulf_executable_wrapper.completion_cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engulf_executable_wrapper"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/LICENSE",
+    "/README.md",
+    "/pyproject.toml",
+]

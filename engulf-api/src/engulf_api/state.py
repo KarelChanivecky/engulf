@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import AbstractContextManager
 from enum import StrEnum
 from pathlib import Path
 
@@ -60,6 +61,14 @@ class StateStore(ABC):
     @abstractmethod
     def delete(self, filename: str, *, missing_ok: bool = False) -> None:
         """Delete a state file."""
+
+    @abstractmethod
+    def transaction(
+        self,
+        *,
+        timeout: float | None = None,
+    ) -> AbstractContextManager[StateStore]:
+        """Hold an exclusive store lock across multiple state operations."""
 
 
 class WorkspaceState(StateStore):

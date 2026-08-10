@@ -1,24 +1,23 @@
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
+import math
 import os
-import pwd
-import shutil
-import stat
-import tempfile
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager
+import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
 from engulf_api import (
-    CallMode,
+    Invocation,
     StateCatalogError,
     StateStore,
     WorkspaceState,
 )
+
+from ._state_platform import _HeldFileLock, _StateOwner, get_state_platform
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,10 +25,15 @@ class WorkspaceContext:
     """Inputs available when an application resolves a workspace root."""
 
     application_id: str
-    binary: str
-    wrapper_args: tuple[str, ...]
-    mode: CallMode
-    cwd: Path
+    invocation: Invocation
+
+    @property
+    def cwd(self) -> Path:
+        return self.invocation.cwd
+
+    @property
+    def arguments(self) -> tuple[str, ...]:
+        return self.invocation.arguments
 
 
 type WorkspaceRootResolver = Callable[[WorkspaceContext], str | os.PathLike[str]]
@@ -40,23 +44,12 @@ class StateHomeContext:
     """Identity available when an application selects its central state home."""
 
     application_id: str
-    effective_uid: int
-    effective_gid: int
-    owner_uid: int
-    owner_gid: int
+    owner_id: str
     owner_home: Path
-    under_sudo: bool
+    elevated: bool
 
 
 type StateHomeResolver = Callable[[StateHomeContext], str | os.PathLike[str]]
-
-
-@dataclass(frozen=True, slots=True)
-class _StateOwner:
-    uid: int
-    gid: int
-    home: Path
-    under_sudo: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,36 +59,26 @@ class WorkspaceCleanupFailure:
     error: Exception
 
 
-class CallStateManager:
-    """Shared state resolution and deferred cleanup for one wrapped call."""
+class InvocationStateManager:
+    """Shared state resolution and deferred cleanup for one invocation."""
 
     def __init__(
         self,
         *,
         application_id: str,
-        binary: str,
-        wrapper_args: tuple[str, ...],
-        mode: CallMode,
-        cwd: Path,
+        invocation: Invocation,
         workspace_root_resolver: WorkspaceRootResolver | None,
         state_home_resolver: StateHomeResolver | None,
         environment: Mapping[str, str],
-        effective_uid: int,
-        effective_gid: int,
     ) -> None:
+        if not isinstance(invocation, Invocation):
+            raise TypeError("invocation must be an Invocation")
         self._application_id = application_id
-        self._workspace_context = WorkspaceContext(
-            application_id,
-            binary,
-            wrapper_args,
-            mode,
-            cwd,
-        )
+        self._workspace_context = WorkspaceContext(application_id, invocation)
         self._workspace_root_resolver = workspace_root_resolver
         self._state_home_resolver = state_home_resolver
         self._environment = environment
-        self._effective_uid = effective_uid
-        self._effective_gid = effective_gid
+        self._platform = get_state_platform()
         self._owner: _StateOwner | None = None
         self._catalog: _StateCatalog | None = None
         self._workspace_root: Path | None = None
@@ -134,15 +117,28 @@ class CallStateManager:
     @property
     def owner(self) -> _StateOwner:
         if self._owner is None:
-            self._owner = _resolve_state_owner(
-                self._effective_uid,
-                self._effective_gid,
-                self._environment,
-            )
+            self._owner = self._platform.resolve_owner(self._environment)
         return self._owner
 
     def user_directory(self, plugin_id: str, *, create: bool) -> Path | None:
         return self._get_catalog().user_directory(plugin_id, create=create)
+
+    def user_store_lock(
+        self,
+        plugin_id: str,
+        *,
+        exclusive: bool,
+        timeout: float | None,
+        operation: str,
+    ) -> AbstractContextManager[None]:
+        return self._get_catalog().store_lock(
+            scope="user",
+            plugin_id=plugin_id,
+            root=None,
+            exclusive=exclusive,
+            timeout=timeout,
+            operation=operation,
+        )
 
     def workspace_access(
         self,
@@ -158,6 +154,32 @@ class CallStateManager:
             create=create,
             exclusive=exclusive,
         )
+
+    def workspace_store_lock(
+        self,
+        root: Path,
+        plugin_id: str,
+        *,
+        exclusive: bool,
+        timeout: float | None,
+        operation: str,
+    ) -> AbstractContextManager[None]:
+        return self._get_catalog().store_lock(
+            scope="workspace",
+            plugin_id=plugin_id,
+            root=root,
+            exclusive=exclusive,
+            timeout=timeout,
+            operation=operation,
+        )
+
+    def resource_leases(
+        self,
+        names: tuple[str, ...],
+        *,
+        timeout: float | None,
+    ) -> AbstractContextManager[None]:
+        return self._get_catalog().resource_leases(names, timeout=timeout)
 
     def _resolve_workspace_root(self) -> Path:
         if self._workspace_resolved:
@@ -180,7 +202,7 @@ class CallStateManager:
             raise TypeError("workspace_root_resolver must return a non-empty text path")
         path = Path(raw_path)
         if not path.is_absolute():
-            path = self._workspace_context.cwd / path
+            path = self._workspace_context.invocation.cwd / path
         try:
             path = path.resolve(strict=True)
         except OSError as error:
@@ -205,12 +227,9 @@ class CallStateManager:
         owner = self.owner
         context = StateHomeContext(
             application_id=self._application_id,
-            effective_uid=self._effective_uid,
-            effective_gid=self._effective_gid,
-            owner_uid=owner.uid,
-            owner_gid=owner.gid,
+            owner_id=owner.identifier,
             owner_home=owner.home,
-            under_sudo=owner.under_sudo,
+            elevated=owner.elevated,
         )
         if self._state_home_resolver is not None:
             candidate = self._state_home_resolver(context)
@@ -227,13 +246,7 @@ class CallStateManager:
                 raise ValueError("state_home_resolver must return an absolute path")
             return path.resolve(strict=False)
 
-        if not owner.under_sudo:
-            configured = self._environment.get("XDG_STATE_HOME", "")
-            if configured:
-                path = Path(configured)
-                if path.is_absolute():
-                    return path.resolve(strict=False)
-        return (owner.home / ".local" / "state").resolve(strict=False)
+        return self._platform.default_state_home(owner, self._environment)
 
 
 class RuntimeStateStore(StateStore):
@@ -241,39 +254,44 @@ class RuntimeStateStore(StateStore):
         self,
         backend: _UserStoreBackend | _WorkspaceStoreBackend,
         require_active: Callable[[str], None],
+        transaction_factory: Callable[
+            [RuntimeStateStore, float | None], AbstractContextManager[StateStore]
+        ],
     ) -> None:
         self._backend = backend
         self._require_active = require_active
+        self._transaction_factory = transaction_factory
+        self._transaction_active = False
 
     @property
     def directory(self) -> Path:
         self._require_active("state.directory")
-        with self._backend.access(create=True, exclusive=True) as directory:
+        with self._access(create=True, exclusive=True) as directory:
             assert directory is not None
             return directory
 
     def path(self, filename: str) -> Path:
         self._require_active("state.path")
         name = _validate_filename(filename)
-        with self._backend.access(create=True, exclusive=True) as directory:
+        with self._access(create=True, exclusive=True) as directory:
             assert directory is not None
             return directory / name
 
     def exists(self, filename: str) -> bool:
         self._require_active("state.exists")
         name = _validate_filename(filename)
-        with self._backend.access(create=False, exclusive=False) as directory:
+        with self._access(create=False, exclusive=False) as directory:
             if directory is None:
                 return False
             path = directory / name
-            if path.is_symlink():
-                raise StateCatalogError(f"state file cannot be a symlink: {path}")
+            if self._backend.owner.platform.is_link(path):
+                raise StateCatalogError(f"state file cannot be a link: {path}")
             return path.exists()
 
     def read_bytes(self, filename: str) -> bytes:
         self._require_active("state.read_bytes")
         name = _validate_filename(filename)
-        with self._backend.access(create=False, exclusive=False) as directory:
+        with self._access(create=False, exclusive=False) as directory:
             if directory is None:
                 raise FileNotFoundError(filename)
             return _read_bytes_no_follow(directory / name)
@@ -292,7 +310,7 @@ class RuntimeStateStore(StateStore):
         name = _validate_filename(filename)
         if not isinstance(data, bytes):
             raise TypeError("state data must be bytes")
-        with self._backend.access(create=True, exclusive=True) as directory:
+        with self._access(create=True, exclusive=True) as directory:
             assert directory is not None
             _atomic_write(directory / name, data, self._backend.owner)
 
@@ -314,12 +332,42 @@ class RuntimeStateStore(StateStore):
         name = _validate_filename(filename)
         if not isinstance(missing_ok, bool):
             raise TypeError("missing_ok must be a boolean")
-        with self._backend.access(create=False, exclusive=True) as directory:
+        with self._access(create=False, exclusive=True) as directory:
             if directory is None:
                 if missing_ok:
                     return
                 raise FileNotFoundError(filename)
             (directory / name).unlink(missing_ok=missing_ok)
+
+    def transaction(
+        self,
+        *,
+        timeout: float | None = None,
+    ) -> AbstractContextManager[StateStore]:
+        self._require_active("state.transaction")
+        return self._transaction_factory(self, _validate_lock_timeout(timeout))
+
+    def _access(
+        self,
+        *,
+        create: bool,
+        exclusive: bool,
+    ) -> AbstractContextManager[Path | None]:
+        return self._backend.access(
+            create=create,
+            exclusive=exclusive,
+            store_locked=self._transaction_active,
+        )
+
+    def _transaction_lock(self, timeout: float | None) -> AbstractContextManager[None]:
+        return self._backend.lock(
+            exclusive=True,
+            timeout=timeout,
+            operation="state transaction",
+        )
+
+    def _set_transaction_active(self, active: bool) -> None:
+        self._transaction_active = active
 
 
 class RuntimeWorkspaceState(RuntimeStateStore, WorkspaceState):
@@ -327,8 +375,11 @@ class RuntimeWorkspaceState(RuntimeStateStore, WorkspaceState):
         self,
         backend: _WorkspaceStoreBackend,
         require_active: Callable[[str], None],
+        transaction_factory: Callable[
+            [RuntimeStateStore, float | None], AbstractContextManager[StateStore]
+        ],
     ) -> None:
-        super().__init__(backend, require_active)
+        super().__init__(backend, require_active, transaction_factory)
         self._workspace_backend = backend
 
     @property
@@ -345,7 +396,7 @@ class RuntimeWorkspaceState(RuntimeStateStore, WorkspaceState):
 
 
 class _UserStoreBackend:
-    def __init__(self, manager: CallStateManager, plugin_id: str) -> None:
+    def __init__(self, manager: InvocationStateManager, plugin_id: str) -> None:
         self.manager = manager
         self.plugin_id = plugin_id
 
@@ -354,19 +405,43 @@ class _UserStoreBackend:
         return self.manager.owner
 
     def access(
-        self, *, create: bool, exclusive: bool
+        self, *, create: bool, exclusive: bool, store_locked: bool
     ) -> AbstractContextManager[Path | None]:
-        del exclusive
-
         @contextmanager
         def access_directory() -> Iterator[Path | None]:
-            yield self.manager.user_directory(self.plugin_id, create=create)
+            lock = (
+                nullcontext()
+                if store_locked
+                else self.lock(
+                    exclusive=exclusive or create,
+                    timeout=None,
+                    operation="state operation",
+                )
+            )
+            with lock:
+                yield self.manager.user_directory(self.plugin_id, create=create)
 
         return access_directory()
 
+    def lock(
+        self,
+        *,
+        exclusive: bool,
+        timeout: float | None,
+        operation: str,
+    ) -> AbstractContextManager[None]:
+        return self.manager.user_store_lock(
+            self.plugin_id,
+            exclusive=exclusive,
+            timeout=timeout,
+            operation=operation,
+        )
+
 
 class _WorkspaceStoreBackend:
-    def __init__(self, manager: CallStateManager, root: Path, plugin_id: str) -> None:
+    def __init__(
+        self, manager: InvocationStateManager, root: Path, plugin_id: str
+    ) -> None:
         self.manager = manager
         self.root = root
         self.plugin_id = plugin_id
@@ -376,13 +451,45 @@ class _WorkspaceStoreBackend:
         return self.manager.owner
 
     def access(
-        self, *, create: bool, exclusive: bool
+        self, *, create: bool, exclusive: bool, store_locked: bool
     ) -> AbstractContextManager[Path | None]:
-        return self.manager.workspace_access(
+        @contextmanager
+        def access_directory() -> Iterator[Path | None]:
+            lock = (
+                nullcontext()
+                if store_locked
+                else self.lock(
+                    exclusive=exclusive or create,
+                    timeout=None,
+                    operation="state operation",
+                )
+            )
+            with (
+                lock,
+                self.manager.workspace_access(
+                    self.root,
+                    self.plugin_id,
+                    create=create,
+                    exclusive=exclusive,
+                ) as directory,
+            ):
+                yield directory
+
+        return access_directory()
+
+    def lock(
+        self,
+        *,
+        exclusive: bool,
+        timeout: float | None,
+        operation: str,
+    ) -> AbstractContextManager[None]:
+        return self.manager.workspace_store_lock(
             self.root,
             self.plugin_id,
-            create=create,
             exclusive=exclusive,
+            timeout=timeout,
+            operation=operation,
         )
 
 
@@ -399,16 +506,23 @@ class _StateCatalog:
         self._user_directory = self._application_directory / "user"
         self._workspaces_directory = self._application_directory / "workspaces"
         self._lock_path = self._application_directory / ".catalog.lock"
+        owner_directory = hashlib.sha256(owner.identifier.encode("utf-8")).hexdigest()
+        self._owner_locks_directory = (
+            self._application_directory / ".locks" / owner_directory
+        )
+        self._store_locks_directory = self._owner_locks_directory / "stores"
+        self._lease_locks_directory = self._owner_locks_directory / "leases"
 
     def user_directory(self, plugin_id: str, *, create: bool) -> Path | None:
-        directory = self._user_directory / plugin_id
-        if create:
-            _ensure_directory(directory, self._owner)
+        with self._lock(exclusive=create):
+            directory = self._user_directory / plugin_id
+            if create:
+                _ensure_directory(directory, self._owner)
+                return directory
+            if not os.path.lexists(directory):
+                return None
+            _require_directory(directory)
             return directory
-        if not os.path.lexists(directory):
-            return None
-        _require_directory(directory)
-        return directory
 
     def workspace_access(
         self,
@@ -420,14 +534,11 @@ class _StateCatalog:
     ) -> AbstractContextManager[Path | None]:
         @contextmanager
         def access_directory() -> Iterator[Path | None]:
-            if not create and not os.path.lexists(self._application_directory):
-                yield None
-                return
             with self._lock(exclusive=exclusive or create):
                 directory = self._workspace_plugin_directory(
                     root, plugin_id, create=create
                 )
-                yield directory
+            yield directory
 
         return access_directory()
 
@@ -442,10 +553,12 @@ class _StateCatalog:
             for directory in sorted(
                 self._workspaces_directory.iterdir(), key=lambda path: path.name
             ):
-                if not directory.is_dir() or directory.is_symlink():
+                try:
+                    _require_directory(directory)
+                except (OSError, StateCatalogError) as error:
                     raise StateCatalogError(
                         f"invalid workspace catalog entry: {directory}"
-                    )
+                    ) from error
                 root = self._read_workspace_metadata(directory)
                 plugin_directory = directory / "plugins" / plugin_id
                 if os.path.lexists(plugin_directory):
@@ -456,7 +569,17 @@ class _StateCatalog:
     def destroy_plugin_workspace(self, root: Path, plugin_id: str) -> None:
         if not os.path.lexists(self._application_directory):
             return
-        with self._lock(exclusive=True):
+        with (
+            self.store_lock(
+                scope="workspace",
+                plugin_id=plugin_id,
+                root=root,
+                exclusive=True,
+                timeout=None,
+                operation="workspace destruction",
+            ),
+            self._lock(exclusive=True),
+        ):
             workspace_directory = self._workspace_directory(root)
             if not os.path.lexists(workspace_directory):
                 return
@@ -471,6 +594,83 @@ class _StateCatalog:
             _require_directory(plugins_directory)
             if not any(plugins_directory.iterdir()):
                 _remove_path(workspace_directory)
+
+    def store_lock(
+        self,
+        *,
+        scope: str,
+        plugin_id: str,
+        root: Path | None,
+        exclusive: bool,
+        timeout: float | None,
+        operation: str,
+    ) -> AbstractContextManager[None]:
+        if scope == "user":
+            if root is not None:
+                raise AssertionError("user store locks cannot have a workspace root")
+            identity = f"user\0{plugin_id}".encode()
+            scope_directory = "user"
+            store_description = f"user store for plugin {plugin_id!r}"
+        elif scope == "workspace":
+            if root is None:
+                raise AssertionError("workspace store locks require a workspace root")
+            identity = b"workspace\0" + os.fsencode(root) + b"\0" + plugin_id.encode()
+            scope_directory = "workspace"
+            store_description = (
+                f"workspace store for plugin {plugin_id!r} at {os.fspath(root)!r}"
+            )
+        else:
+            raise AssertionError(f"unknown state scope: {scope}")
+
+        digest = hashlib.sha256(identity).hexdigest()
+        path = self._store_locks_directory / scope_directory / f"{digest}.lock"
+        timeout_message = (
+            f"{operation} timed out for {store_description} "
+            f"in application {self._application_id!r} at "
+            f"{os.fspath(self._state_home)!r} as owner "
+            f"{self._owner.identifier!r}"
+        )
+        return _file_lock_context(
+            path,
+            owner=self._owner,
+            exclusive=exclusive,
+            timeout=timeout,
+            timeout_message=timeout_message,
+        )
+
+    def resource_leases(
+        self,
+        names: tuple[str, ...],
+        *,
+        timeout: float | None,
+    ) -> AbstractContextManager[None]:
+        @contextmanager
+        def acquire_all() -> Iterator[None]:
+            deadline = _timeout_deadline(timeout)
+            acquired: list[_HeldFileLock] = []
+            try:
+                for name in names:
+                    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()
+                    path = self._lease_locks_directory / f"{digest}.lock"
+                    message = (
+                        f"resource lease timed out for {name!r} in application "
+                        f"{self._application_id!r} at {os.fspath(self._state_home)!r} "
+                        f"as owner {self._owner.identifier!r}"
+                    )
+                    acquired.append(
+                        _acquire_file_lock(
+                            path,
+                            owner=self._owner,
+                            exclusive=True,
+                            deadline=deadline,
+                            timeout_message=message,
+                        )
+                    )
+                yield
+            finally:
+                _release_file_locks(reversed(acquired))
+
+        return acquire_all()
 
     def _workspace_plugin_directory(
         self, root: Path, plugin_id: str, *, create: bool
@@ -539,65 +739,89 @@ class _StateCatalog:
             _require_directory(plugins_directory)
 
     def _lock(self, *, exclusive: bool) -> AbstractContextManager[None]:
-        @contextmanager
-        def locked() -> Iterator[None]:
-            _ensure_directory(self._application_directory, self._owner)
-            flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC
-            if hasattr(os, "O_NOFOLLOW"):
-                flags |= os.O_NOFOLLOW
-            descriptor = os.open(self._lock_path, flags, 0o600)
-            try:
-                os.fchmod(descriptor, 0o600)
-                _chown_descriptor(descriptor, self._owner)
-                operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-                fcntl.flock(descriptor, operation)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-            finally:
-                os.close(descriptor)
-
-        return locked()
+        return _file_lock_context(
+            self._lock_path,
+            owner=self._owner,
+            exclusive=exclusive,
+            timeout=None,
+            timeout_message="internal state catalog lock timed out",
+        )
 
 
-def _resolve_state_owner(
-    effective_uid: int,
-    effective_gid: int,
-    environment: Mapping[str, str],
-) -> _StateOwner:
-    owner_uid = effective_uid
-    owner_gid = effective_gid
-    under_sudo = False
-
-    if effective_uid == 0:
-        sudo_uid = _parse_nonnegative_integer(environment.get("SUDO_UID"))
-        sudo_gid = _parse_nonnegative_integer(environment.get("SUDO_GID"))
-        if sudo_uid not in {None, 0} and sudo_gid is not None:
-            try:
-                account = pwd.getpwuid(sudo_uid)
-            except KeyError:
-                account = None
-            if account is not None:
-                owner_uid = sudo_uid
-                owner_gid = sudo_gid
-                under_sudo = True
-
-    try:
-        account = pwd.getpwuid(owner_uid)
-    except KeyError as error:
-        raise RuntimeError(f"state owner UID does not exist: {owner_uid}") from error
-    return _StateOwner(owner_uid, owner_gid, Path(account.pw_dir), under_sudo)
-
-
-def _parse_nonnegative_integer(value: str | None) -> int | None:
-    if value is None:
+def _validate_lock_timeout(timeout: float | None) -> float | None:
+    if timeout is None:
         return None
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise TypeError("lock timeout must be a number or None")
     try:
-        parsed = int(value, 10)
-    except ValueError:
+        normalized = float(timeout)
+    except OverflowError as error:
+        raise ValueError("lock timeout must be finite") from error
+    if not math.isfinite(normalized):
+        raise ValueError("lock timeout must be finite")
+    if normalized < 0:
+        raise ValueError("lock timeout cannot be negative")
+    return normalized
+
+
+def _timeout_deadline(timeout: float | None) -> float | None:
+    if timeout is None:
         return None
-    return parsed if parsed >= 0 else None
+    return time.monotonic() + timeout
+
+
+def _file_lock_context(
+    path: Path,
+    *,
+    owner: _StateOwner,
+    exclusive: bool,
+    timeout: float | None,
+    timeout_message: str,
+) -> AbstractContextManager[None]:
+    @contextmanager
+    def locked() -> Iterator[None]:
+        lock = _acquire_file_lock(
+            path,
+            owner=owner,
+            exclusive=exclusive,
+            deadline=_timeout_deadline(timeout),
+            timeout_message=timeout_message,
+        )
+        try:
+            yield
+        finally:
+            lock.release()
+
+    return locked()
+
+
+def _acquire_file_lock(
+    path: Path,
+    *,
+    owner: _StateOwner,
+    exclusive: bool,
+    deadline: float | None,
+    timeout_message: str,
+) -> _HeldFileLock:
+    return owner.platform.acquire_file_lock(
+        path,
+        owner=owner,
+        exclusive=exclusive,
+        deadline=deadline,
+        timeout_message=timeout_message,
+    )
+
+
+def _release_file_locks(locks: Iterable[_HeldFileLock]) -> None:
+    first_error: BaseException | None = None
+    for lock in locks:
+        try:
+            lock.release()
+        except BaseException as error:  # noqa: BLE001 - close every descriptor.
+            if first_error is None:
+                first_error = error
+    if first_error is not None:
+        raise first_error
 
 
 def _workspace_digest(root: Path) -> str:
@@ -620,88 +844,20 @@ def _validate_filename(filename: str) -> str:
 
 
 def _ensure_directory(directory: Path, owner: _StateOwner) -> None:
-    missing: list[Path] = []
-    current = directory
-    while not os.path.lexists(current):
-        missing.append(current)
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    if os.path.lexists(current):
-        _require_directory(current)
-
-    for path in reversed(missing):
-        try:
-            path.mkdir(mode=0o700)
-        except FileExistsError:
-            _require_directory(path)
-            continue
-        path.chmod(0o700)
-        _chown_path(path, owner)
-
-    _require_directory(directory)
+    owner.platform.ensure_directory(directory, owner)
 
 
 def _require_directory(directory: Path) -> None:
-    metadata = directory.lstat()
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-        raise StateCatalogError(f"state path is not a directory: {directory}")
+    get_state_platform().require_directory(directory)
 
 
 def _read_bytes_no_follow(path: Path) -> bytes:
-    flags = os.O_RDONLY | os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags)
-    try:
-        with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            return stream.read()
-    finally:
-        os.close(descriptor)
+    return get_state_platform().read_bytes_no_follow(path)
 
 
 def _atomic_write(path: Path, data: bytes, owner: _StateOwner) -> None:
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        os.fchmod(descriptor, 0o600)
-        _chown_descriptor(descriptor, owner)
-        with os.fdopen(descriptor, "wb", closefd=False) as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.close(descriptor)
-        descriptor = -1
-        os.replace(temporary_path, path)
-        directory_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        temporary_path.unlink(missing_ok=True)
+    owner.platform.atomic_write(path, data, owner)
 
 
 def _remove_path(path: Path) -> None:
-    if not os.path.lexists(path):
-        return
-    metadata = path.lstat()
-    if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
-        shutil.rmtree(path)
-    else:
-        path.unlink()
-
-
-def _chown_path(path: Path, owner: _StateOwner) -> None:
-    if os.geteuid() == 0:
-        os.chown(path, owner.uid, owner.gid, follow_symlinks=False)
-
-
-def _chown_descriptor(descriptor: int, owner: _StateOwner) -> None:
-    if os.geteuid() == 0:
-        os.fchown(descriptor, owner.uid, owner.gid)
+    get_state_platform().remove_path(path)

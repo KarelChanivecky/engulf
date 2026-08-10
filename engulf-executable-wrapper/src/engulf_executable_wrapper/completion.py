@@ -5,11 +5,10 @@ import json
 import os
 import shlex
 import sys
-import traceback
 from collections.abc import Iterable
 from pathlib import Path
 
-from engulf_api import (
+from engulf_executable_wrapper_api import (
     ArgumentRegistry,
     CompletionCallable,
     CompletionCandidate,
@@ -20,74 +19,70 @@ from engulf_api import (
     normalize_candidate,
 )
 
-from .wrapper import FRAMEWORK_ERROR_EXIT, Engulf
+from .goal import ExecutableWrapperGoal
 
 
-def handle_internal_protocol(engulf: Engulf, argv: tuple[str, ...]) -> int:
+def handle_internal_protocol(
+    goal: ExecutableWrapperGoal,
+    argv: tuple[str, ...],
+) -> int:
     action = os.environ.get("ENGULF_INTERNAL_ACTION")
-    try:
-        if action == "describe":
-            json.dump(
-                {
-                    "binary": engulf.binary,
-                    "completion_service": Path(engulf.binary).name,
-                },
-                sys.stdout,
-            )
-            sys.stdout.write("\n")
-            return 0
+    if action == "describe":
+        json.dump(
+            {
+                "executable": goal.executable,
+                "completion_service": Path(goal.executable).name,
+            },
+            sys.stdout,
+        )
+        sys.stdout.write("\n")
+        return 0
 
-        shell = Shell(os.environ["ENGULF_INTERNAL_SHELL"])
-        cursor_index = int(os.environ["ENGULF_INTERNAL_CWORD"])
-        words = _ensure_current_word(argv, cursor_index)
+    shell = Shell(os.environ["ENGULF_INTERNAL_SHELL"])
+    cursor_index = int(os.environ["ENGULF_INTERNAL_CWORD"])
+    words = _ensure_current_word(argv, cursor_index)
 
-        if action == "normalize":
-            normalized, normalized_cursor = normalize_for_binary(
-                engulf.arguments, words, cursor_index
-            )
-            _write_nul_records((str(normalized_cursor), *normalized))
-            return 0
+    if action == "normalize":
+        normalized, normalized_cursor = normalize_for_binary(
+            goal.arguments, words, cursor_index
+        )
+        _write_nul_records((str(normalized_cursor), *normalized))
+        return 0
 
-        if action == "complete":
-            context = CompletionContext(
-                shell=shell,
-                wrapper_command=os.environ.get("ENGULF_INTERNAL_WRAPPER_COMMAND", ""),
-                binary=engulf.binary,
-                words=words,
-                cursor_index=cursor_index,
-            )
-            native_available = os.environ.get("ENGULF_INTERNAL_NATIVE") == "1"
-            candidates = collect_candidates(
-                engulf,
-                context,
-                include_binary_provider=not native_available,
-            )
-            _write_nul_records(candidate.value for candidate in candidates)
-            return 0
+    if action == "complete":
+        context = CompletionContext(
+            shell=shell,
+            wrapper_command=os.environ.get("ENGULF_INTERNAL_WRAPPER_COMMAND", ""),
+            binary=goal.executable,
+            words=words,
+            cursor_index=cursor_index,
+        )
+        native_available = os.environ.get("ENGULF_INTERNAL_NATIVE") == "1"
+        candidates = collect_candidates(
+            goal,
+            context,
+            include_binary_provider=not native_available,
+        )
+        _write_nul_records(candidate.value for candidate in candidates)
+        return 0
 
-        raise ValueError(f"unsupported internal action: {action!r}")
-    except Exception as error:  # noqa: BLE001 - completion must not leak plugin failures.
-        if os.environ.get("ENGULF_DEBUG"):
-            traceback.print_exc(file=sys.stderr)
-        else:
-            print(f"engulf: completion failed: {error}", file=sys.stderr)
-        return FRAMEWORK_ERROR_EXIT
+    raise ValueError(f"unsupported internal action: {action!r}")
 
 
 def collect_candidates(
-    engulf: Engulf,
+    goal: ExecutableWrapperGoal,
     context: CompletionContext,
     *,
     include_binary_provider: bool,
 ) -> tuple[CompletionCandidate, ...]:
     candidates: list[CompletionCandidate] = []
 
-    if include_binary_provider and engulf.completion_provider is not None:
-        candidates.extend(_provider_candidates(engulf.completion_provider, context))
+    if include_binary_provider and goal.completion_provider is not None:
+        candidates.extend(_provider_candidates(goal.completion_provider, context))
 
-    candidates.extend(_argument_candidates(engulf.arguments, context))
-    candidates.extend(engulf.completions.static_candidates(context))
-    for provider in engulf.completions.providers:
+    candidates.extend(_argument_candidates(goal.arguments, context))
+    candidates.extend(goal.completions.static_candidates(context))
+    for provider in goal.completions.providers:
         candidates.extend(_provider_candidates(provider, context))
 
     deduplicated: list[CompletionCandidate] = []
@@ -132,6 +127,8 @@ def _argument_candidates(
 
     result: list[CompletionCandidate] = []
     prior_words = context.words[: max(0, context.cursor_index)]
+    if "--" in prior_words:
+        return result
     for spec in registry.options:
         if not spec.repeatable and _option_was_used(spec.names, prior_words):
             continue
@@ -185,6 +182,8 @@ def normalize_for_binary(
     hidden: set[int] = set()
     index = 0
     while index < len(words):
+        if words[index] == "--":
+            break
         assignment = registry.find_assignment(words[index])
         if assignment is not None:
             spec, _, _ = assignment

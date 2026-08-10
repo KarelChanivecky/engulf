@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import re
 import shlex
@@ -12,23 +14,31 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from engulf_api import CompletionCandidate, CompletionContext, Plugin, Shell
-
-from engulf import Engulf
-from engulf.completion import (
+from engulf_executable_wrapper import ExecutableWrapperGoal, completion_cli
+from engulf_executable_wrapper.completion import (
     collect_candidates,
     normalize_for_binary,
     render_completion_script,
 )
+from engulf_executable_wrapper_api import (
+    CompletionCandidate,
+    CompletionContext,
+    ExecutableWrapperPlugin,
+    Shell,
+)
+
+from engulf import Application
 
 
-class CompletionPlugin(Plugin):
+class CompletionPlugin(ExecutableWrapperPlugin):
     plugin_id = "tests.completion.primary"
 
-    def help(self) -> str:
+    def help(self, api) -> str:
+        del api
         return "completion plugin"
 
-    def register_arguments(self, registry) -> None:
+    def register_arguments(self, registry, api) -> None:
+        del api
         registry.option(
             "--plugin",
             "-p",
@@ -42,7 +52,8 @@ class CompletionPlugin(Plugin):
             visible_to_binary_completion=True,
         )
 
-    def register_completions(self, registry) -> None:
+    def register_completions(self, registry, api) -> None:
+        del api
         registry.candidate("--plugin-command", description="Plugin command")
         registry.provider(lambda context: [CompletionCandidate("--dynamic")])
 
@@ -53,15 +64,19 @@ class CompletionTestCase(unittest.TestCase):
         self.addCleanup(self.temporary_directory.cleanup)
         self.plugin_directory = Path(self.temporary_directory.name)
         with patch(
-            "engulf.wrapper.load_directory_plugins",
+            "engulf.application.load_directory_plugins",
             return_value=(CompletionPlugin(),),
         ):
-            self.engulf = Engulf(
+            self.goal = ExecutableWrapperGoal(
                 "/bin/echo",
+                completion_provider=lambda context: ["--base", "--dynamic"],
+            )
+            self.application = Application(
                 "engulf-completion-tests",
+                self.goal,
+                display_name="engulf-completion-tests",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
-                completion_provider=lambda context: ["--base", "--dynamic"],
             )
 
     def context(self, *words: str, cursor: int | None = None) -> CompletionContext:
@@ -77,19 +92,27 @@ class CompletionTestCase(unittest.TestCase):
 
     def test_merges_and_deduplicates_candidates(self) -> None:
         candidates = collect_candidates(
-            self.engulf,
+            self.goal,
             self.context("--"),
             include_binary_provider=True,
         )
 
         self.assertEqual(
             [candidate.value for candidate in candidates],
-            ["--base", "--dynamic", "--plugin=", "--visible=", "--plugin-command"],
+            [
+                "--base",
+                "--dynamic",
+                "--engulf-completion-tests-log-level=",
+                "--engulf-completion-tests-plugin-log-level=",
+                "--plugin=",
+                "--visible=",
+                "--plugin-command",
+            ],
         )
 
     def test_native_completion_suppresses_explicit_binary_provider(self) -> None:
         candidates = collect_candidates(
-            self.engulf,
+            self.goal,
             self.context("--"),
             include_binary_provider=False,
         )
@@ -99,12 +122,12 @@ class CompletionTestCase(unittest.TestCase):
 
     def test_completes_separate_and_assigned_option_values(self) -> None:
         separate = collect_candidates(
-            self.engulf,
+            self.goal,
             self.context("--plugin", "a"),
             include_binary_provider=False,
         )
         assigned = collect_candidates(
-            self.engulf,
+            self.goal,
             self.context("--plugin=b"),
             include_binary_provider=False,
         )
@@ -112,17 +135,63 @@ class CompletionTestCase(unittest.TestCase):
         self.assertEqual([candidate.value for candidate in separate], ["alpha"])
         self.assertEqual([candidate.value for candidate in assigned], ["--plugin=beta"])
 
+    def test_completes_logging_levels_and_plugin_ids(self) -> None:
+        global_level = collect_candidates(
+            self.goal,
+            self.context("--engulf-completion-tests-log-level", "d"),
+            include_binary_provider=False,
+        )
+        plugin_id = collect_candidates(
+            self.goal,
+            self.context("--engulf-completion-tests-plugin-log-level", "tests.c"),
+            include_binary_provider=False,
+        )
+        plugin_level = collect_candidates(
+            self.goal,
+            self.context(
+                "--engulf-completion-tests-plugin-log-level=tests.completion.primary=i"
+            ),
+            include_binary_provider=False,
+        )
+
+        self.assertEqual([candidate.value for candidate in global_level], ["debug"])
+        self.assertEqual(
+            [candidate.value for candidate in plugin_id],
+            ["tests.completion.primary="],
+        )
+        self.assertEqual(
+            [candidate.value for candidate in plugin_level],
+            [
+                (
+                    "--engulf-completion-tests-plugin-log-level="
+                    "tests.completion.primary=info"
+                )
+            ],
+        )
+
+    def test_wrapper_logging_options_are_not_completed_after_separator(self) -> None:
+        candidates = collect_candidates(
+            self.goal,
+            self.context("--", "--engulf"),
+            include_binary_provider=False,
+        )
+
+        self.assertNotIn(
+            "--engulf-completion-tests-log-level=",
+            [candidate.value for candidate in candidates],
+        )
+
     def test_hides_wrapper_options_from_binary_completion_context(self) -> None:
         words = ("--plugin", "alpha", "sub", "--visible", "yes", "current")
 
-        normalized, cursor = normalize_for_binary(self.engulf.arguments, words, 5)
+        normalized, cursor = normalize_for_binary(self.goal.arguments, words, 5)
 
         self.assertEqual(normalized, ("sub", "--visible", "yes", "current"))
         self.assertEqual(cursor, 3)
 
     def test_hidden_current_value_becomes_empty_binary_word(self) -> None:
         normalized, cursor = normalize_for_binary(
-            self.engulf.arguments,
+            self.goal.arguments,
             ("--plugin", "alpha"),
             1,
         )
@@ -131,26 +200,29 @@ class CompletionTestCase(unittest.TestCase):
         self.assertEqual(cursor, 0)
 
     def test_duplicate_option_registration_is_rejected(self) -> None:
-        class DuplicatePlugin(Plugin):
+        class DuplicatePlugin(ExecutableWrapperPlugin):
             plugin_id = "tests.completion.duplicate"
 
-            def help(self) -> str:
+            def help(self, api) -> str:
+                del api
                 return ""
 
-            def register_arguments(self, registry) -> None:
+            def register_arguments(self, registry, api) -> None:
+                del api
                 registry.option("--same")
                 registry.option("--same")
 
         with (
-            self.assertRaisesRegex(ValueError, "already registered"),
+            self.assertRaisesRegex(RuntimeError, "already registered"),
             patch(
-                "engulf.wrapper.load_directory_plugins",
+                "engulf.application.load_directory_plugins",
                 return_value=(DuplicatePlugin(),),
             ),
         ):
-            Engulf(
-                "echo",
+            Application(
                 "engulf-completion-tests",
+                ExecutableWrapperGoal("echo"),
+                display_name="engulf-completion-tests",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
             )
@@ -178,33 +250,110 @@ class CompletionTestCase(unittest.TestCase):
             self.assertEqual(zsh.returncode, 0, zsh.stderr)
 
 
+class CompletionCLITestCase(unittest.TestCase):
+    @staticmethod
+    def invoke_with(result=None, *, side_effect=None):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch(
+                "engulf_executable_wrapper.completion_cli.subprocess.run",
+                return_value=result,
+                side_effect=side_effect,
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = completion_cli.main(["bash", "wrapped"])
+        return exit_code, stdout.getvalue(), stderr.getvalue()
+
+    def test_reports_wrapper_launch_failure(self) -> None:
+        exit_code, stdout, stderr = self.invoke_with(
+            side_effect=FileNotFoundError("missing wrapper")
+        )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout, "")
+        self.assertIn("cannot run wrapped: missing wrapper", stderr)
+
+    def test_reports_nonzero_inspection_with_stderr_or_exit_code(self) -> None:
+        cases = (
+            (23, "inspection failed\n", "inspection failed"),
+            (9, "", "exit code 9"),
+        )
+        for returncode, process_stderr, expected in cases:
+            with self.subTest(returncode=returncode, stderr=process_stderr):
+                result = subprocess.CompletedProcess(
+                    ["wrapped"],
+                    returncode,
+                    stdout="",
+                    stderr=process_stderr,
+                )
+
+                exit_code, stdout, stderr = self.invoke_with(result)
+
+                self.assertEqual(exit_code, 1)
+                self.assertEqual(stdout, "")
+                self.assertIn(f"wrapper inspection failed: {expected}", stderr)
+
+    def test_rejects_malformed_wrapper_descriptions(self) -> None:
+        descriptions = (
+            "{",
+            "{}",
+            "[]",
+            '{"completion_service": 3}',
+            '{"completion_service": ""}',
+            '{"completion_service": "bad\\u0000service"}',
+        )
+        for description in descriptions:
+            with self.subTest(description=description):
+                result = subprocess.CompletedProcess(
+                    ["wrapped"],
+                    0,
+                    stdout=description,
+                    stderr="",
+                )
+
+                exit_code, stdout, stderr = self.invoke_with(result)
+
+                self.assertEqual(exit_code, 1)
+                self.assertEqual(stdout, "")
+                self.assertIn("invalid wrapper description:", stderr)
+
+
 class ShellCompletionIntegrationTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.directory = Path(self.temporary_directory.name)
-        self.source_root = Path(__file__).resolve().parents[1] / "src"
+        workspace = Path(__file__).resolve().parents[2]
+        self.source_roots = (
+            workspace / "engulf-api" / "src",
+            workspace / "engulf" / "src",
+            workspace / "engulf-executable-wrapper-api" / "src",
+            workspace / "engulf-executable-wrapper" / "src",
+        )
         self.plugin_directory = self.directory / "plugins"
         self.plugin_directory.mkdir()
         (self.plugin_directory / "example.py").write_text(
             textwrap.dedent(
                 """\
-                from engulf_api import Plugin
+                from engulf_executable_wrapper_api import ExecutableWrapperPlugin
 
-                class ExamplePlugin(Plugin):
+                class ExamplePlugin(ExecutableWrapperPlugin):
                     plugin_id = "tests.completion.integration"
 
-                    def help(self):
+                    def help(self, api):
                         return "example"
 
-                    def register_arguments(self, registry):
+                    def register_arguments(self, registry, api):
                         registry.option(
                             "--plugin",
                             takes_value=True,
                             value_completer=lambda context: ["alpha", "beta"],
                         )
 
-                    def register_completions(self, registry):
+                    def register_completions(self, registry, api):
                         registry.candidate("--plugin-command")
 
                 plugin = ExamplePlugin()
@@ -218,16 +367,20 @@ class ShellCompletionIntegrationTestCase(unittest.TestCase):
                 f"""\
                 #!{sys.executable}
                 from pathlib import Path
-                from engulf import Engulf
+                from engulf import Application
+                from engulf_executable_wrapper import ExecutableWrapperGoal
 
-                engulf = Engulf(
-                    "/bin/echo",
+                application = Application(
                     "engulf-shell-integration-tests",
+                    ExecutableWrapperGoal(
+                        "/bin/echo",
+                        completion_provider=lambda context: ["--base"],
+                    ),
+                    display_name="engulf-shell-tests",
                     plugin_dir=Path(__file__).with_name("plugins"),
                     discover_installed=False,
-                    completion_provider=lambda context: ["--base"],
                 )
-                raise SystemExit(engulf.run())
+                raise SystemExit(application.run())
                 """
             ),
             encoding="utf-8",
@@ -237,10 +390,9 @@ class ShellCompletionIntegrationTestCase(unittest.TestCase):
     def environment(self) -> dict[str, str]:
         environment = os.environ.copy()
         existing = environment.get("PYTHONPATH")
+        paths = os.pathsep.join(os.fspath(path) for path in self.source_roots)
         environment["PYTHONPATH"] = (
-            str(self.source_root)
-            if not existing
-            else f"{self.source_root}{os.pathsep}{existing}"
+            paths if not existing else f"{paths}{os.pathsep}{existing}"
         )
         return environment
 
@@ -277,7 +429,13 @@ printf '%s\n' "${{COMPREPLY[@]}}"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.splitlines(),
-            ["--base", "--plugin=", "--plugin-command"],
+            [
+                "--base",
+                "--engulf-shell-tests-log-level=",
+                "--engulf-shell-tests-plugin-log-level=",
+                "--plugin=",
+                "--plugin-command",
+            ],
         )
 
     def test_bash_native_completion_receives_filtered_context(self) -> None:
@@ -348,7 +506,13 @@ print -rl -- "${{captured[@]}}"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.splitlines(),
-            ["--base", "--plugin=", "--plugin-command"],
+            [
+                "--base",
+                "--engulf-shell-tests-log-level=",
+                "--engulf-shell-tests-plugin-log-level=",
+                "--plugin=",
+                "--plugin-command",
+            ],
         )
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
@@ -437,7 +601,13 @@ print -rl -- "${{captured[@]}}"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             result.stdout.splitlines(),
-            ["--base", "--plugin=", "--plugin-command"],
+            [
+                "--base",
+                "--engulf-shell-tests-log-level=",
+                "--engulf-shell-tests-plugin-log-level=",
+                "--plugin=",
+                "--plugin-command",
+            ],
         )
 
     def test_completion_generator_inspects_wrapper(self) -> None:
@@ -445,7 +615,7 @@ print -rl -- "${{captured[@]}}"
             [
                 sys.executable,
                 "-m",
-                "engulf.completion_cli",
+                "engulf_executable_wrapper.completion_cli",
                 "bash",
                 str(self.wrapper),
             ],

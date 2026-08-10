@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "engulf-encryption-example"
+version = "0.1.0"
+description = "Self-contained Python goal example for Engulf"
+readme = "README.md"
+requires-python = ">=3.14"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "cryptography>=45",
+    "engulf>=0.1,<1",
+]
+
+[project.scripts]
+engulf-encrypt = "engulf_encryption_example:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engulf_encryption_example"]

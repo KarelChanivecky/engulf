@@ -1,122 +1,244 @@
-# Engulf API
+# engulf-api
 
-`engulf-api` is the dependency-free, versioned plugin contract for Engulf. Plugin
-packages import `engulf_api`; they do not need to import or depend on the `engulf`
-runtime package.
+`engulf-api` is the dependency-free public contract shared by Engulf goals and
+plugins. It intentionally contains no plugin discovery, process runner, completion
+engine, or filesystem implementation.
+
+The package is typed, OS-independent, and requires Python 3.14 or newer.
+
+## Goal Contract
+
+Every application selects exactly one `Goal`. The goal describes both the outcome
+of an invocation and the process used to reach it.
 
 ```python
-from engulf_api import Plugin, PluginDependency
+from engulf_api import (
+    Goal,
+    GoalAPI,
+    GoalContract,
+    GoalRequirement,
+    GoalResult,
+    Invocation,
+    Plugin,
+)
+
+REQUIREMENT = GoalRequirement("com.example.report", 1)
 
 
-class AuditPlugin(Plugin):
-    plugin_id = "com.example.audit"
-    priority = 75
-    plugin_dependencies = (PluginDependency("com.example.identity"),)
-    context_reads = frozenset({"com.example.identity.principal"})
-
-    def help(self) -> str:
-        return "  --audit-log PATH   Record this invocation"
-
-    def before_call(self, event, api) -> None:
-        principal = api.require_context("com.example.identity.principal")
-        api.add("--audit-principal", str(principal))
+class ReportPlugin(Plugin):
+    goal_requirement = REQUIREMENT
 
 
-plugin = AuditPlugin
+class ReportGoal(Goal[str]):
+    contract = GoalContract(REQUIREMENT, ReportPlugin)
+
+    def achieve(self, invocation: Invocation, api: GoalAPI) -> GoalResult[str]:
+        report = build_report(invocation.arguments)
+        return GoalResult.completed(report)
 ```
 
-Plugin wheels should declare `engulf-api>=1.0,<2`. The contract follows semantic
-versioning: compatible additions increment the minor version, while changes that
-break plugin implementations or event consumers increment the major version.
-`PLUGIN_API_MAJOR` is also encoded in installed-plugin entry-point groups such as
-`engulf.plugins.v1.example_app`.
+`GoalRequirement` is the technical compatibility boundary:
 
-This package owns the plugin base class, lifecycle events, call-scoped `PluginAPI`,
-dependency descriptors, argument and completion registries, completion value types,
-and related enums. Process execution, plugin discovery, and shell integration remain
-in `engulf`.
+- `goal_id` is a lowercase, globally qualified identifier.
+- `api_major` changes when that goal's plugin contract becomes incompatible.
+- `GoalContract.plugin_type` is checked at runtime after an activated plugin is
+  imported.
 
-## Plugin Metadata
+Application policy can activate a plugin that did not name that application, but
+it cannot bypass these checks.
 
-Every plugin declares a globally unique, lowercase, dot-qualified `plugin_id`.
-Plugin and context identifiers use the same form, for example
-`com.example.audit` and `com.example.identity.principal`.
+## Results And Invocation
 
-Every plugin has an integer `priority` with a neutral default of `50`. Priority is a
-tie-breaker among plugins currently available in a dependency graph: higher values
-run first, and equal values retain deterministic discovery order.
+`Invocation` contains immutable arguments, canonical current directory, and an
+immutable environment mapping. `GoalResult[T]` carries a typed value, exit code,
+optional error, and one of these statuses:
 
-Hard plugin dependencies are declared with `PluginDependency`. Its `preprocess` and
-`postprocess` fields independently specify where the dependency runs relative to the
-declaring plugin:
+Goal-specific API packages that define process outcomes should reuse
+`validate_exit_code()` for exact integer exit codes from 0 through 255. Booleans are
+rejected even though Python treats them as integers.
+
+- `COMPLETED`: the goal ran to its defined completion, even if its domain exit code
+  is nonzero.
+- `REJECTED`: a plugin or goal vetoed the operation before its normal work.
+- `FAILED`: goal work started or was attempted but did not succeed.
+- `FRAMEWORK_FAILED`: lifecycle, callback, contract, or cleanup infrastructure
+  failed. Engulf uses exit code 70 by default.
+
+`Application.invoke()` returns the complete result. `Application.run()` returns only
+its exit code.
+
+## Plugin Lifecycle
+
+All goal-specific plugin classes derive from `Plugin` and declare:
+
+```python
+from engulf_api import ElevationRequirement
+
+
+class ExamplePlugin(Plugin):
+    plugin_id = "com.example.report.audit"
+    goal_requirement = REQUIREMENT
+    priority = 50
+    elevation_requirement = ElevationRequirement.NONE
+    plugin_dependencies = ()
+    context_reads = frozenset()
+    context_writes = frozenset()
+```
+
+`elevation_requirement` has three exact values:
+
+- `NONE` (the default): the plugin does not claim elevated behavior.
+- `OPTIONAL`: the plugin activates in either mode and branches on `api.elevated`.
+- `REQUIRED`: application construction raises `PluginElevationError` when the
+  process is not elevated, before goal setup or plugin registration callbacks run.
+
+Engulf detects root effective UID on POSIX and token elevation on Windows. It does
+not invoke `sudo`, display a UAC prompt, or restart the process. Elevation is plugin
+runtime metadata, so a selected installed plugin is imported before the declaration
+can be validated; plugin modules must remain free of import-time side effects.
+
+The optional universal outer hooks are:
+
+```python
+def before_goal(self, invocation, api):
+    # Return None to continue or GoalResult to short-circuit.
+    return None
+
+
+def after_goal(self, invocation, result, api):
+    # Return the unchanged or transformed result.
+    return result
+```
+
+Before hooks use preprocessing order. The first non-`None` result stops later before
+hooks and skips the goal. After hooks run in postprocessing order only for plugins
+whose before hook completed, including the plugin that short-circuited. Their result
+transformations compose as middleware.
+
+## Goal Phases
+
+A goal invokes goal-specific plugin methods through typed `GoalPhase` declarations:
+
+```python
+from dataclasses import dataclass
+from engulf_api import GoalPhase, InvocationAPI, PluginOrder
+
+
+@dataclass(frozen=True)
+class Finding:
+    message: str
+
+
+def inspect(plugin, event, api: InvocationAPI) -> Finding | None:
+    return plugin.inspect(event, api)
+
+
+INSPECT = GoalPhase(
+    "com.example.report.inspect",
+    PluginOrder.PREPROCESS,
+    inspect,
+    Finding,
+)
+
+findings = api.dispatch(INSPECT, event)
+```
+
+Dispatch returns `AttributedContribution[Finding]` values after every callback has
+run. Each value carries the stable `plugin_id`. A plugin cannot see another plugin's
+contribution while its own callback is running. Contribution objects should be
+immutable; the runtime validates the declared contribution type.
+
+Only two dependency orders exist: `PREPROCESS` and `POSTPROCESS`. Each goal phase
+selects one. Setup phases normally use preprocessing order.
+
+## Dependencies And Priority
+
+`PluginDependency` is a hard active-plugin dependency with independent ordering:
 
 ```python
 from engulf_api import DependencyPosition, PluginDependency
 
-
-PluginDependency(
-    "com.example.identity",
-    preprocess=DependencyPosition.BEFORE,
-    postprocess=DependencyPosition.AFTER,
+plugin_dependencies = (
+    PluginDependency(
+        "com.example.report.source",
+        preprocess=DependencyPosition.BEFORE,
+        postprocess=DependencyPosition.AFTER,
+    ),
 )
 ```
 
-Those are the defaults and produce middleware order: identity preprocesses before
-audit, while audit postprocesses before identity. Either phase can be `None` to omit
-its ordering edge. The dependency remains a hard presence requirement even when both
-phases are `None`.
+Dependencies do not activate packages. If policy leaves a required plugin inactive,
+application construction fails. Priority defaults to 50 and only breaks ties among
+plugins currently ready in the dependency graph; higher values run first.
 
-`context_reads` and `context_writes` are `frozenset[str]` declarations enforced by
-the runtime. During either active hook, `PluginAPI` provides `get_context`,
-`require_context`, and `set_context`. Preprocess hooks additionally receive argument
-editing and preemption capabilities through `remove`, `remove_range`, `add`, and
-`preempt`. A retained API object cannot be used outside its active hook.
+## Managed Invocation API
 
-## Persistent State Contract
+`InvocationAPI` provides:
 
-`PluginAPI.state(StateScope.USER)` returns a plugin-specific `StateStore` for
-user-global data. `PluginAPI.state(StateScope.WORKSPACE)` returns a `WorkspaceState`
-for the wrapping application's current canonical workspace. Both scopes are explicit;
-there is no combined scope.
+- an initialized, lifecycle-bound `PluginLogger`;
+- the process elevation snapshot through `api.elevated`;
+- declared context reads and writes;
+- user and workspace state stores;
+- known workspace enumeration and deferred destruction;
+- process-safe state transactions;
+- application/user-scoped named resource leases.
+
+The goal receives the same facilities through `GoalAPI`, using a reserved goal-owned
+state namespace. Registration callbacks receive initialized logging and the same
+read-only elevation snapshot through `RegistrationAPI`.
+
+All capabilities are callback-bound. Retained loggers, stores, transactions, leases,
+and APIs fail after the callback ends. Hook cleanup forcibly releases leaked locks.
+
+## State Transactions
+
+Individual writes are atomic, but atomic writes do not make a read-modify-write
+sequence atomic. Use a transaction:
 
 ```python
-from engulf_api import Plugin, StateScope
+import json
+from engulf_api import StateScope
 
-
-class StatefulPlugin(Plugin):
-    plugin_id = "com.example.stateful"
-
-    def help(self) -> str:
-        return ""
-
-    def before_call(self, event, api) -> None:
-        workspace = api.state(StateScope.WORKSPACE)
-        workspace.write_text("deployment-id", "deployment-123")
-
-    def after_call(self, event, api) -> None:
-        user = api.state(StateScope.USER)
-        user.write_text("last-exit-code", str(event.outcome.exit_code))
+state = api.state(StateScope.USER)
+with state.transaction(timeout=10) as locked:
+    records = json.loads(locked.read_text("records.json"))
+    records[key] = value
+    locked.write_text("records.json", json.dumps(records))
 ```
 
-`StateStore` exposes a managed directory plus validated single-filename operations:
-`path`, `exists`, `read_bytes`, `read_text`, `write_bytes`, `write_text`, and `delete`.
-`WorkspaceState.root` identifies the canonical workspace and
-`WorkspaceState.destroy()` queues removal of the calling plugin's namespace. The
-runtime defers queued destruction until lifecycle dispatch completes.
+Transactions serialize cooperating state access; they do not roll back. Writes made
+before an exception remain committed. Nested or overlapping transactions through one
+API are rejected.
 
-`PluginAPI.known_workspaces()` returns every centrally cataloged `WorkspaceState`
-where the calling plugin has state. This supports global operations from a different
-working directory. It does not reveal namespaces owned only by other plugins, and a
-returned root may no longer exist on disk.
+## Resource Leases
 
-State objects are call-bound capabilities: their methods are valid only during the
-calling plugin's active before- or after-hook. Files persist across calls and
-processes. Filesystem location, canonical workspace selection, locking, ownership,
-atomic writes, cleanup, and exit-code policy are runtime responsibilities described
-in the Engulf
-[persistent-state guide](../engulf/README.md#persistent-plugin-state).
+Leases coordinate long-running external work between cooperating Engulf processes
+that share a resolved state location and application ID:
 
-See the Engulf runtime's
-[plugin-authoring guide](../engulf/README.md#creating-an-installed-plugin) for a
-complete package tree, `pyproject.toml`, implementation, build commands, installation,
-and discovery verification.
+```python
+with api.leases(
+    (
+        f"docker-image:{image}",
+        f"vrnetlab-builder:{builder.resolve()}",
+    )
+):
+    build_or_inspect_external_resources()
+
+    with state.transaction() as locked:
+        # Re-read, merge, and atomically save fingerprint state.
+        ...
+```
+
+Acquire all external-resource leases first, then use short state transactions. Lease
+names are exact and case-sensitive. Multi-lease acquisition validates, deduplicates,
+sorts, applies one deadline, and releases in reverse order.
+
+Leases do not establish ownership against unrelated tools or different users.
+External resources still require ownership markers and recovery journals.
+
+## Versioning
+
+`PLUGIN_API_MAJOR` remains `1`. Entry-point groups encode this major. Goal APIs have
+their own major in `GoalRequirement`, so one goal contract can evolve independently
+of another. This repository is still developing its first release; existing package
+versions are not bumped for these changes.

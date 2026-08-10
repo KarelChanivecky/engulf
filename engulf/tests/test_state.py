@@ -11,32 +11,35 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from engulf_api import Plugin, PluginPhaseError, StateCatalogError, StateScope
+from engulf_api import PluginPhaseError, StateCatalogError, StateScope
+from support import CoreTestPlugin, PassGoal
 
 from engulf import (
     FRAMEWORK_ERROR_EXIT,
-    Engulf,
+    Application,
     StateHomeContext,
     WorkspaceContext,
 )
 
 
-class StatePlugin(Plugin):
+class StatePlugin(CoreTestPlugin):
     def __init__(self, plugin_id: str, *, before=None, after=None) -> None:
         self.plugin_id = plugin_id
         self.before_action = before
         self.after_action = after
 
-    def help(self) -> str:
+    def help(self, api) -> str:
+        del api
         return ""
 
-    def before_call(self, event, api) -> None:
+    def before_goal(self, event, api):
         if self.before_action is not None:
             self.before_action(event, api)
 
-    def after_call(self, event, api) -> None:
+    def after_goal(self, event, result, api):
         if self.after_action is not None:
             self.after_action(event, api)
+        return result
 
 
 _DEFAULT_STATE_HOME = object()
@@ -55,21 +58,22 @@ class StateTestCase(unittest.TestCase):
         self.workspace = self.directory / "workspace"
         self.workspace.mkdir()
 
-    def make_engulf(
+    def make_application(
         self,
-        *plugins: Plugin,
+        *plugins: CoreTestPlugin,
         binary: str | os.PathLike[str] = "/bin/true",
         workspace_root_resolver=None,
         state_home_resolver=_DEFAULT_STATE_HOME,
-    ) -> Engulf:
+    ) -> Application:
         if state_home_resolver is _DEFAULT_STATE_HOME:
             state_home_resolver = lambda context: self.state_home
         with patch(
-            "engulf.wrapper.load_directory_plugins", return_value=tuple(plugins)
+            "engulf.application.load_directory_plugins", return_value=tuple(plugins)
         ):
-            return Engulf(
-                binary,
+            return Application(
                 self.application_id,
+                PassGoal(exit_code=1 if os.fspath(binary) == "/bin/false" else 0),
+                display_name="engulf-state-tests",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
                 workspace_root_resolver=workspace_root_resolver,
@@ -77,9 +81,9 @@ class StateTestCase(unittest.TestCase):
             )
 
     @staticmethod
-    def run_in(engulf: Engulf, workspace: Path, args=()) -> int:
-        with patch("engulf.wrapper.Path.cwd", return_value=workspace):
-            return engulf.run(args)
+    def run_in(application: Application, workspace: Path, args=()) -> int:
+        with patch("engulf.application.Path.cwd", return_value=workspace):
+            return application.run(args)
 
     def workspace_record(self, workspace: Path) -> Path:
         digest = hashlib.sha256(os.fsencode(workspace.resolve())).hexdigest()
@@ -92,8 +96,13 @@ class StateTestCase(unittest.TestCase):
             self.assertEqual(api.known_workspaces(), ())
 
         no_state = StatePlugin("tests.state.no_state", before=inspect_absent_state)
-        self.assertEqual(self.run_in(self.make_engulf(no_state), self.workspace), 0)
-        self.assertFalse(self.state_home.exists())
+        self.assertEqual(
+            self.run_in(self.make_application(no_state), self.workspace), 0
+        )
+        self.assertFalse((self.state_home / self.application_id / "user").exists())
+        self.assertFalse(
+            (self.state_home / self.application_id / "workspaces").exists()
+        )
 
         plugin_id = "tests.state.managed"
         retained = []
@@ -131,7 +140,7 @@ class StateTestCase(unittest.TestCase):
             )
 
         plugin = StatePlugin(plugin_id, before=write_state, after=read_state)
-        self.assertEqual(self.run_in(self.make_engulf(plugin), self.workspace), 0)
+        self.assertEqual(self.run_in(self.make_application(plugin), self.workspace), 0)
 
         user_directory = self.state_home / self.application_id / "user" / plugin_id
         workspace_directory = (
@@ -145,15 +154,16 @@ class StateTestCase(unittest.TestCase):
             (workspace_directory / "workspace.bin").read_bytes(),
             b"workspace value",
         )
-        self.assertEqual(stat.S_IMODE(user_directory.stat().st_mode), 0o700)
-        self.assertEqual(stat.S_IMODE(workspace_directory.stat().st_mode), 0o700)
-        self.assertEqual(
-            stat.S_IMODE((user_directory / "user.txt").stat().st_mode), 0o600
-        )
-        self.assertEqual(
-            stat.S_IMODE((workspace_directory / "workspace.bin").stat().st_mode),
-            0o600,
-        )
+        if os.name == "posix":
+            self.assertEqual(stat.S_IMODE(user_directory.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(workspace_directory.stat().st_mode), 0o700)
+            self.assertEqual(
+                stat.S_IMODE((user_directory / "user.txt").stat().st_mode), 0o600
+            )
+            self.assertEqual(
+                stat.S_IMODE((workspace_directory / "workspace.bin").stat().st_mode),
+                0o600,
+            )
         for store in retained:
             with self.assertRaises(PluginPhaseError):
                 store.exists("user.txt")
@@ -172,7 +182,7 @@ class StateTestCase(unittest.TestCase):
                 "marker", "from-a"
             ),
         )
-        self.assertEqual(self.run_in(self.make_engulf(writer), workspace_a), 0)
+        self.assertEqual(self.run_in(self.make_application(writer), workspace_a), 0)
         workspace_a.rmdir()
 
         observed = []
@@ -191,7 +201,9 @@ class StateTestCase(unittest.TestCase):
 
         reader = StatePlugin(owner_id, before=inspect_owner)
         other = StatePlugin(other_id, before=inspect_other)
-        self.assertEqual(self.run_in(self.make_engulf(reader, other), workspace_b), 0)
+        self.assertEqual(
+            self.run_in(self.make_application(reader, other), workspace_b), 0
+        )
         with self.assertRaises(PluginPhaseError):
             observed[0].read_text("marker")
 
@@ -207,7 +219,7 @@ class StateTestCase(unittest.TestCase):
         first = StatePlugin(first_id, before=seed("first"))
         second = StatePlugin(second_id, before=seed("second"))
         self.assertEqual(
-            self.run_in(self.make_engulf(first, second), self.workspace), 0
+            self.run_in(self.make_application(first, second), self.workspace), 0
         )
         record = self.workspace_record(self.workspace)
 
@@ -224,7 +236,7 @@ class StateTestCase(unittest.TestCase):
         first = StatePlugin(first_id, before=destroy_first, after=verify_deferred)
         second = StatePlugin(second_id)
         self.assertEqual(
-            self.run_in(self.make_engulf(first, second), self.workspace), 0
+            self.run_in(self.make_application(first, second), self.workspace), 0
         )
         self.assertFalse((record / "plugins" / first_id).exists())
         self.assertTrue((record / "plugins" / second_id).is_dir())
@@ -234,7 +246,7 @@ class StateTestCase(unittest.TestCase):
             second_id,
             after=lambda event, api: api.state(StateScope.WORKSPACE).destroy(),
         )
-        self.assertEqual(self.run_in(self.make_engulf(second), self.workspace), 0)
+        self.assertEqual(self.run_in(self.make_application(second), self.workspace), 0)
         self.assertFalse(record.exists())
 
     def test_cleanup_commits_after_binary_and_postprocess_failures(self) -> None:
@@ -247,14 +259,16 @@ class StateTestCase(unittest.TestCase):
                     "marker", "value"
                 ),
             )
-            self.assertEqual(self.run_in(self.make_engulf(plugin), self.workspace), 0)
+            self.assertEqual(
+                self.run_in(self.make_application(plugin), self.workspace), 0
+            )
 
         destroy = lambda event, api: api.state(StateScope.WORKSPACE).destroy()
 
         seed()
         plugin = StatePlugin(plugin_id, before=destroy)
         result = self.run_in(
-            self.make_engulf(plugin, binary="/bin/false"), self.workspace
+            self.make_application(plugin, binary="/bin/false"), self.workspace
         )
         self.assertEqual(result, 1)
         self.assertFalse(self.workspace_record(self.workspace).exists())
@@ -266,7 +280,7 @@ class StateTestCase(unittest.TestCase):
 
         plugin = StatePlugin(plugin_id, before=destroy, after=fail_after)
         with contextlib.redirect_stderr(io.StringIO()):
-            result = self.run_in(self.make_engulf(plugin), self.workspace)
+            result = self.run_in(self.make_application(plugin), self.workspace)
         self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
         self.assertFalse(self.workspace_record(self.workspace).exists())
 
@@ -296,7 +310,7 @@ class StateTestCase(unittest.TestCase):
             contextlib.redirect_stderr(io.StringIO()) as errors,
         ):
             result = self.run_in(
-                self.make_engulf(*plugins, binary="/bin/false"), self.workspace
+                self.make_application(*plugins, binary="/bin/false"), self.workspace
             )
 
         self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
@@ -330,7 +344,7 @@ class StateTestCase(unittest.TestCase):
             api.state(StateScope.USER).write_text("user", "value")
 
         plugin = StatePlugin("tests.state.resolvers", before=inspect)
-        engulf = self.make_engulf(
+        engulf = self.make_application(
             plugin,
             workspace_root_resolver=resolve_workspace,
             state_home_resolver=resolve_state_home,
@@ -340,15 +354,21 @@ class StateTestCase(unittest.TestCase):
         self.assertEqual(len(workspace_contexts), 1)
         workspace_context = workspace_contexts[0]
         self.assertEqual(workspace_context.application_id, self.application_id)
-        self.assertEqual(workspace_context.binary, "/bin/true")
-        self.assertEqual(workspace_context.wrapper_args, ("deploy", "--flag"))
+        self.assertEqual(workspace_context.arguments, ("deploy", "--flag"))
         self.assertEqual(workspace_context.cwd, self.workspace.resolve())
         self.assertEqual(len(state_home_contexts), 1)
         state_home_context = state_home_contexts[0]
         self.assertEqual(state_home_context.application_id, self.application_id)
-        self.assertEqual(state_home_context.effective_uid, os.geteuid())
-        self.assertEqual(state_home_context.effective_gid, os.getegid())
+        self.assertTrue(state_home_context.owner_id)
+        if os.name == "posix":
+            self.assertEqual(
+                state_home_context.owner_id,
+                f"posix:{os.geteuid()}:{os.getegid()}",
+            )
+        self.assertTrue(state_home_context.owner_home.is_absolute())
+        self.assertIsInstance(state_home_context.elevated, bool)
 
+    @unittest.skipUnless(os.name == "posix", "sudo ownership is POSIX-specific")
     def test_sudo_defaults_to_the_invoking_users_state_home(self) -> None:
         plugin_id = "tests.state.sudo"
         owner_home = self.directory / "owner-home"
@@ -361,7 +381,7 @@ class StateTestCase(unittest.TestCase):
                 "marker", "value"
             ),
         )
-        engulf = self.make_engulf(plugin, state_home_resolver=None)
+        engulf = self.make_application(plugin, state_home_resolver=None)
 
         with (
             patch.dict(
@@ -373,11 +393,11 @@ class StateTestCase(unittest.TestCase):
                 },
                 clear=False,
             ),
-            patch("engulf.wrapper.os.geteuid", return_value=0),
-            patch("engulf.wrapper.os.getegid", return_value=0),
-            patch("engulf.state.pwd.getpwuid", return_value=account),
-            patch("engulf.state._chown_path"),
-            patch("engulf.state._chown_descriptor"),
+            patch("engulf._state_posix.os.geteuid", return_value=0),
+            patch("engulf._state_posix.os.getegid", return_value=0),
+            patch("engulf._state_posix.pwd.getpwuid", return_value=account),
+            patch("engulf._state_posix._chown_path"),
+            patch("engulf._state_posix._chown_descriptor"),
         ):
             result = self.run_in(engulf, self.workspace)
 
@@ -402,7 +422,7 @@ class StateTestCase(unittest.TestCase):
                 "marker", "value"
             ),
         )
-        self.assertEqual(self.run_in(self.make_engulf(writer), self.workspace), 0)
+        self.assertEqual(self.run_in(self.make_application(writer), self.workspace), 0)
         metadata = self.workspace_record(self.workspace) / "workspace.json"
         metadata.write_text('{"root":"/wrong","version":1}', encoding="utf-8")
 
@@ -411,13 +431,13 @@ class StateTestCase(unittest.TestCase):
                 api.known_workspaces()
 
         reader = StatePlugin(plugin_id, before=inspect)
-        self.assertEqual(self.run_in(self.make_engulf(reader), self.workspace), 0)
+        self.assertEqual(self.run_in(self.make_application(reader), self.workspace), 0)
 
     def test_constructor_rejects_non_callable_resolvers(self) -> None:
         with self.assertRaises(TypeError):
-            self.make_engulf(workspace_root_resolver=3)
+            self.make_application(workspace_root_resolver=3)
         with self.assertRaises(TypeError):
-            self.make_engulf(state_home_resolver=3)
+            self.make_application(state_home_resolver=3)
 
 
 if __name__ == "__main__":

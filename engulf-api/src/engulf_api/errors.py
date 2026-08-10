@@ -7,7 +7,11 @@ class MissingContextError(KeyError):
 
 
 class PluginPhaseError(RuntimeError):
-    """Raised when a PluginAPI operation is unavailable in the current phase."""
+    """Raised when an API operation is unavailable in the current lifecycle phase."""
+
+
+class LockTimeoutError(TimeoutError):
+    """A state transaction or resource lease could not be acquired in time."""
 
 
 class StateCatalogError(RuntimeError):

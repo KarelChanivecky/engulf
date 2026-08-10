@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "engulf-executable-wrapper-api"
+version = "1.0.0"
+description = "Plugin contract for the Engulf executable-wrapper goal"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+keywords = ["cli", "wrapper", "plugins", "api"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = ["engulf-api>=1.0,<2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engulf_executable_wrapper_api"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/LICENSE",
+    "/README.md",
+    "/pyproject.toml",
+]

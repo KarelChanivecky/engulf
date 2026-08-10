@@ -5,24 +5,21 @@ build-backend = "hatchling.build"
 [project]
 name = "engulf"
 version = "0.1.0"
-description = "A plugin framework for transparent binary wrappers"
+description = "Managed goal-oriented plugin framework for CLI applications"
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
-keywords = ["cli", "wrapper", "plugins", "completion"]
+keywords = ["cli", "applications", "plugins", "framework"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
-    "Operating System :: POSIX :: Linux",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
 dependencies = ["engulf-api>=1.0,<2"]
-
-[project.scripts]
-engulf-completion = "engulf.completion_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/engulf"]
@@ -35,11 +32,3 @@ include = [
     "/README.md",
     "/pyproject.toml",
 ]
-
-[tool.ruff]
-target-version = "py314"
-
-[tool.mypy]
-python_version = "3.14"
-strict = true
-files = ["src/engulf"]

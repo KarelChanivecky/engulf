@@ -8,7 +8,8 @@ import os
 import re
 import sys
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from enum import StrEnum
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from types import ModuleType
@@ -16,6 +17,9 @@ from types import ModuleType
 from engulf_api import (
     PLUGIN_API_MAJOR,
     DependencyPosition,
+    ElevationRequirement,
+    GoalContract,
+    GoalRequirement,
     Plugin,
     PluginDependency,
     plugin_name,
@@ -31,13 +35,19 @@ class PluginDependencyError(PluginLoadError):
     """Raised when plugin metadata cannot produce valid activation orders."""
 
 
+class PluginElevationError(PluginLoadError):
+    """Raised when an active plugin requires unavailable elevation."""
+
+
 @dataclass(frozen=True, slots=True)
 class LoadedPlugin:
     """Validated, immutable metadata for one discovered plugin."""
 
     plugin: Plugin
     plugin_id: str
+    goal_requirement: GoalRequirement
     priority: int
+    elevation_requirement: ElevationRequirement
     dependencies: tuple[PluginDependency, ...]
     context_reads: frozenset[str]
     context_writes: frozenset[str]
@@ -50,6 +60,65 @@ class PluginOrders:
 
     preprocess: tuple[LoadedPlugin, ...]
     postprocess: tuple[LoadedPlugin, ...]
+
+
+class PluginPolicyMode(StrEnum):
+    """Application policy used to turn catalog candidates into active plugins."""
+
+    DECLARED = "declared"
+    ALLOWLIST = "allowlist"
+    BLOCKLIST = "blocklist"
+
+
+@dataclass(frozen=True, slots=True)
+class PluginPolicy:
+    """Immutable application-side plugin activation policy."""
+
+    mode: PluginPolicyMode = PluginPolicyMode.DECLARED
+    plugin_ids: frozenset[str] = frozenset()
+    include_dependencies: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, PluginPolicyMode):
+            raise TypeError("plugin policy mode must be a PluginPolicyMode")
+        if type(self.plugin_ids) is not frozenset:
+            raise TypeError("plugin policy IDs must be a frozenset")
+        if type(self.include_dependencies) is not bool:
+            raise TypeError("include_dependencies must be a boolean")
+        if self.include_dependencies and self.mode is not PluginPolicyMode.ALLOWLIST:
+            raise ValueError(
+                "include_dependencies is supported only by allowlist policy"
+            )
+        for plugin_id in self.plugin_ids:
+            validate_global_identifier(plugin_id, label="plugin policy ID")
+
+    @classmethod
+    def declared(cls, *, include: Iterable[str] = ()) -> PluginPolicy:
+        return cls(PluginPolicyMode.DECLARED, _policy_ids(include))
+
+    @classmethod
+    def allow_only(
+        cls,
+        plugin_ids: Iterable[str],
+        *,
+        include_dependencies: bool = False,
+    ) -> PluginPolicy:
+        return cls(
+            PluginPolicyMode.ALLOWLIST,
+            _policy_ids(plugin_ids),
+            include_dependencies,
+        )
+
+    @classmethod
+    def allow_all_except(cls, plugin_ids: Iterable[str]) -> PluginPolicy:
+        return cls(PluginPolicyMode.BLOCKLIST, _policy_ids(plugin_ids))
+
+
+@dataclass(frozen=True, slots=True)
+class PluginDiscovery:
+    plugins: tuple[Plugin, ...]
+    missing_policy_ids: tuple[str, ...]
+    loaded_plugins: tuple[LoadedPlugin, ...]
 
 
 _namespace_counter = itertools.count()
@@ -69,10 +138,22 @@ def normalize_application_id(application_id: str) -> str:
     return re.sub(r"[-_.]+", "-", application_id).lower()
 
 
-def plugin_entry_point_group(application_id: str) -> str:
-    """Return the entry-point group used by one wrapping application."""
+def application_plugin_entry_point_group(application_id: str) -> str:
+    """Return the plugin-side activation declaration group for an application."""
     normalized = normalize_application_id(application_id).replace("-", "_")
-    return f"engulf.plugins.v{PLUGIN_API_MAJOR}.{normalized}"
+    return f"engulf.plugins.v{PLUGIN_API_MAJOR}.application.{normalized}"
+
+
+def goal_plugin_entry_point_group(
+    goal_id: str,
+    goal_api_major: int,
+) -> str:
+    """Return the metadata catalog for one exact goal contract."""
+    validated = validate_global_identifier(goal_id, label="goal_id")
+    if type(goal_api_major) is not int or goal_api_major < 1:
+        raise ValueError("goal API major must be a positive integer")
+    normalized = re.sub(r"[-_.]+", "_", validated)
+    return f"engulf.plugins.v{PLUGIN_API_MAJOR}.goal.v{goal_api_major}.{normalized}"
 
 
 def resolve_plugin_directory(plugin_dir: str | os.PathLike[str]) -> Path:
@@ -132,25 +213,191 @@ def load_directory_plugins(plugin_dir: str | os.PathLike[str]) -> tuple[Plugin, 
     return plugins
 
 
-def load_installed_plugins(application_id: str) -> tuple[Plugin, ...]:
-    """Load installed plugins registered for an application and API major."""
-    group = plugin_entry_point_group(application_id)
-    try:
-        discovered = entry_points(group=group)
-    except Exception as error:
-        raise PluginLoadError(
-            f"failed to discover installed plugins in entry-point group {group!r}"
-        ) from error
+def load_installed_plugins(
+    application_id: str,
+    contract: GoalContract,
+    policy: PluginPolicy,
+) -> PluginDiscovery:
+    """Select installed plugins without any directory-plugin candidates."""
+    return discover_plugins(
+        application_id,
+        contract,
+        policy,
+        directory_plugins=(),
+        discover_installed=True,
+    )
 
-    plugins: list[Plugin] = []
-    identifiers: set[str] = set()
-    for entry_point in sorted(discovered, key=_entry_point_sort_key):
-        identifier = _entry_point_identifier(entry_point)
-        if identifier in identifiers:
-            raise PluginLoadError(f"duplicate installed plugin: {identifier}")
-        identifiers.add(identifier)
-        plugins.append(_load_entry_point(entry_point, identifier))
-    return tuple(plugins)
+
+def discover_plugins(
+    application_id: str,
+    contract: GoalContract,
+    policy: PluginPolicy,
+    *,
+    directory_plugins: Iterable[Plugin],
+    discover_installed: bool,
+) -> PluginDiscovery:
+    """Select compatible directory and installed plugins for one application."""
+    if not isinstance(contract, GoalContract):
+        raise TypeError("contract must be a GoalContract")
+    if not isinstance(policy, PluginPolicy):
+        raise TypeError("policy must be a PluginPolicy")
+    if not isinstance(discover_installed, bool):
+        raise TypeError("discover_installed must be a boolean")
+
+    local_plugins = tuple(directory_plugins)
+    local_by_id: dict[str, list[Plugin]] = {}
+    for plugin in local_plugins:
+        _validate_goal_compatibility(
+            plugin,
+            contract,
+            source="directory plugin",
+        )
+        try:
+            plugin_id = validate_global_identifier(
+                plugin.plugin_id,
+                label="directory plugin_id",
+            )
+        except (TypeError, ValueError) as error:
+            raise PluginDependencyError(str(error)) from error
+        local_by_id.setdefault(plugin_id, []).append(plugin)
+
+    catalog_entries: dict[str, EntryPoint] = {}
+    application_entries: dict[str, EntryPoint] = {}
+    if discover_installed:
+        catalog_group = goal_plugin_entry_point_group(
+            contract.goal_id,
+            contract.api_major,
+        )
+        application_group = application_plugin_entry_point_group(application_id)
+        catalog_entries = _entry_point_catalog(catalog_group)
+        application_entries = _entry_point_catalog(application_group)
+
+    declared_ids: set[str] = set()
+    for plugin_id, declaration in application_entries.items():
+        catalog = catalog_entries.get(plugin_id)
+        if catalog is None:
+            continue
+        if not _same_entry_point_source(declaration, catalog):
+            raise PluginLoadError(
+                f"application declaration for plugin {plugin_id!r} does not match "
+                "its goal catalog entry"
+            )
+        declared_ids.add(plugin_id)
+
+    if policy.mode is PluginPolicyMode.DECLARED:
+        selected_local_ids = set(local_by_id)
+        selected_catalog_ids = declared_ids | set(policy.plugin_ids)
+    elif policy.mode is PluginPolicyMode.ALLOWLIST:
+        selected_local_ids = set(policy.plugin_ids) & set(local_by_id)
+        selected_catalog_ids = set(policy.plugin_ids) & set(catalog_entries)
+    else:
+        selected_local_ids = set(local_by_id) - set(policy.plugin_ids)
+        selected_catalog_ids = set(catalog_entries) - set(policy.plugin_ids)
+
+    loaded_catalog: dict[str, Plugin] = {}
+    metadata: dict[int, LoadedPlugin] = {}
+    if policy.include_dependencies:
+        _expand_allowlist_dependencies(
+            contract,
+            local_by_id,
+            catalog_entries,
+            selected_local_ids,
+            selected_catalog_ids,
+            loaded_catalog,
+            metadata,
+        )
+
+    installed_plugins: list[Plugin] = []
+    selected_entries = (
+        catalog_entries[plugin_id] for plugin_id in selected_catalog_ids
+    )
+    for entry_point in sorted(selected_entries, key=_entry_point_sort_key):
+        installed_plugin = loaded_catalog.get(entry_point.name)
+        if installed_plugin is None:
+            installed_plugin = _load_catalog_plugin(entry_point, contract)
+        installed_plugins.append(installed_plugin)
+
+    selected_local = tuple(
+        plugin for plugin in local_plugins if plugin.plugin_id in selected_local_ids
+    )
+    available_ids = set(local_by_id) | set(catalog_entries)
+    missing = (
+        ()
+        if policy.mode is PluginPolicyMode.BLOCKLIST
+        else tuple(sorted(set(policy.plugin_ids) - available_ids))
+    )
+    selected_plugins = selected_local + tuple(installed_plugins)
+    loaded_plugins: list[LoadedPlugin] = []
+    for discovery_index, plugin in enumerate(selected_plugins):
+        snapshot = metadata.get(id(plugin))
+        if snapshot is None:
+            snapshot = _snapshot_plugin(plugin, discovery_index)
+        elif snapshot.discovery_index != discovery_index:
+            snapshot = replace(snapshot, discovery_index=discovery_index)
+        loaded_plugins.append(snapshot)
+    return PluginDiscovery(selected_plugins, missing, tuple(loaded_plugins))
+
+
+def _expand_allowlist_dependencies(
+    contract: GoalContract,
+    local_by_id: dict[str, list[Plugin]],
+    catalog_entries: dict[str, EntryPoint],
+    selected_local_ids: set[str],
+    selected_catalog_ids: set[str],
+    loaded_catalog: dict[str, Plugin],
+    metadata: dict[int, LoadedPlugin],
+) -> None:
+    pending = list(selected_local_ids | selected_catalog_ids)
+    heapq.heapify(pending)
+    expanded: set[str] = set()
+
+    while pending:
+        plugin_id = heapq.heappop(pending)
+        if plugin_id in expanded:
+            continue
+        expanded.add(plugin_id)
+
+        plugins = list(local_by_id.get(plugin_id, ()))
+        entry_point = catalog_entries.get(plugin_id)
+        if entry_point is not None:
+            selected_catalog_ids.add(plugin_id)
+            installed = loaded_catalog.get(plugin_id)
+            if installed is None:
+                installed = _load_catalog_plugin(entry_point, contract)
+                loaded_catalog[plugin_id] = installed
+            plugins.append(installed)
+        if plugin_id in local_by_id:
+            selected_local_ids.add(plugin_id)
+
+        for plugin in plugins:
+            snapshot = metadata.get(id(plugin))
+            if snapshot is None:
+                snapshot = _snapshot_plugin(plugin, 0)
+                metadata[id(plugin)] = snapshot
+            for dependency in snapshot.dependencies:
+                dependency_id = dependency.plugin_id
+                if dependency_id in expanded:
+                    continue
+                if dependency_id in local_by_id:
+                    selected_local_ids.add(dependency_id)
+                if dependency_id in catalog_entries:
+                    selected_catalog_ids.add(dependency_id)
+                heapq.heappush(pending, dependency_id)
+
+
+def _load_catalog_plugin(
+    entry_point: EntryPoint,
+    contract: GoalContract,
+) -> Plugin:
+    identifier = _entry_point_identifier(entry_point)
+    plugin = _load_entry_point(entry_point, identifier)
+    if plugin.plugin_id != entry_point.name:
+        raise PluginLoadError(
+            f"installed plugin {identifier} exports plugin_id "
+            f"{plugin.plugin_id!r}; entry-point names must equal plugin_id"
+        )
+    _validate_goal_compatibility(plugin, contract, source=identifier)
+    return plugin
 
 
 def resolve_plugin_orders(plugins: Iterable[Plugin]) -> PluginOrders:
@@ -159,6 +406,39 @@ def resolve_plugin_orders(plugins: Iterable[Plugin]) -> PluginOrders:
         _snapshot_plugin(plugin, discovery_index)
         for discovery_index, plugin in enumerate(plugins)
     )
+    return _resolve_loaded_plugin_orders(loaded)
+
+
+def resolve_discovered_plugin_orders(discovery: PluginDiscovery) -> PluginOrders:
+    """Resolve orders from metadata snapshotted during plugin discovery."""
+    if not isinstance(discovery, PluginDiscovery):
+        raise TypeError("discovery must be a PluginDiscovery")
+    return _resolve_loaded_plugin_orders(discovery.loaded_plugins)
+
+
+def validate_plugin_elevation(
+    plugins: Iterable[LoadedPlugin],
+    *,
+    elevated: bool,
+) -> None:
+    """Require elevation when any selected plugin declares it mandatory."""
+    if type(elevated) is not bool:
+        raise TypeError("elevated must be a boolean")
+    required = tuple(
+        item.plugin_id
+        for item in plugins
+        if item.elevation_requirement is ElevationRequirement.REQUIRED
+    )
+    if required and not elevated:
+        raise PluginElevationError(
+            "process elevation is required by active plugins: "
+            + ", ".join(repr(plugin_id) for plugin_id in required)
+        )
+
+
+def _resolve_loaded_plugin_orders(
+    loaded: tuple[LoadedPlugin, ...],
+) -> PluginOrders:
     by_id: dict[str, LoadedPlugin] = {}
     for item in loaded:
         existing = by_id.get(item.plugin_id)
@@ -249,7 +529,9 @@ def _snapshot_plugin(plugin: Plugin, discovery_index: int) -> LoadedPlugin:
     name = plugin_name(plugin)
     try:
         plugin_id = plugin.plugin_id
+        goal_requirement = plugin.goal_requirement
         priority = plugin.priority
+        elevation_requirement = plugin.elevation_requirement
         dependencies = plugin.plugin_dependencies
         context_reads = plugin.context_reads
         context_writes = plugin.context_writes
@@ -264,9 +546,19 @@ def _snapshot_plugin(plugin: Plugin, discovery_index: int) -> LoadedPlugin:
         )
     except (TypeError, ValueError) as error:
         raise PluginDependencyError(str(error)) from error
+    if not isinstance(goal_requirement, GoalRequirement):
+        raise PluginDependencyError(
+            f"goal_requirement for plugin {validated_plugin_id!r} must be a "
+            "GoalRequirement"
+        )
     if type(priority) is not int:
         raise PluginDependencyError(
             f"priority for plugin {validated_plugin_id!r} must be an integer"
+        )
+    if not isinstance(elevation_requirement, ElevationRequirement):
+        raise PluginDependencyError(
+            f"elevation_requirement for plugin {validated_plugin_id!r} must be an "
+            "ElevationRequirement"
         )
     if type(dependencies) is not tuple:
         raise PluginDependencyError(
@@ -287,7 +579,9 @@ def _snapshot_plugin(plugin: Plugin, discovery_index: int) -> LoadedPlugin:
     return LoadedPlugin(
         plugin=plugin,
         plugin_id=validated_plugin_id,
+        goal_requirement=goal_requirement,
         priority=priority,
+        elevation_requirement=elevation_requirement,
         dependencies=dependencies,
         context_reads=validated_reads,
         context_writes=validated_writes,
@@ -414,6 +708,95 @@ def _entry_point_distribution_name(entry_point: EntryPoint) -> str:
     if entry_point.dist is None:
         return "unknown-distribution"
     return entry_point.dist.name or "unknown-distribution"
+
+
+def _entry_point_catalog(group: str) -> dict[str, EntryPoint]:
+    try:
+        discovered = entry_points(group=group)
+    except Exception as error:
+        raise PluginLoadError(
+            f"failed to discover installed plugins in entry-point group {group!r}"
+        ) from error
+
+    catalog: dict[str, EntryPoint] = {}
+    for entry_point in sorted(discovered, key=_entry_point_sort_key):
+        try:
+            plugin_id = validate_global_identifier(
+                entry_point.name,
+                label=f"entry-point name in {group!r}",
+            )
+        except (TypeError, ValueError) as error:
+            raise PluginLoadError(str(error)) from error
+        existing = catalog.get(plugin_id)
+        if existing is not None:
+            raise PluginLoadError(
+                f"duplicate plugin ID {plugin_id!r} in entry-point group {group!r}: "
+                f"{_entry_point_identifier(existing)} and "
+                f"{_entry_point_identifier(entry_point)}"
+            )
+        catalog[plugin_id] = entry_point
+    return catalog
+
+
+def _same_entry_point_source(left: EntryPoint, right: EntryPoint) -> bool:
+    if left.value != right.value:
+        return False
+    left_distribution = left.dist
+    right_distribution = right.dist
+    if left_distribution is None or right_distribution is None:
+        return left_distribution is None and right_distribution is None
+    return (
+        _normalize_distribution_name(left_distribution.name or "")
+        == _normalize_distribution_name(right_distribution.name or "")
+        and left_distribution.version == right_distribution.version
+    )
+
+
+def _normalize_distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _validate_goal_compatibility(
+    plugin: Plugin,
+    contract: GoalContract,
+    *,
+    source: str,
+) -> None:
+    if not isinstance(plugin, contract.plugin_type):
+        raise PluginLoadError(
+            f"{source} must provide {contract.plugin_type.__module__}."
+            f"{contract.plugin_type.__qualname__}"
+        )
+    requirement = getattr(plugin, "goal_requirement", None)
+    if requirement != contract.requirement:
+        raise PluginLoadError(
+            f"{source} requires goal {requirement!r}, expected {contract.requirement!r}"
+        )
+
+
+def validate_goal_plugins(
+    plugins: Iterable[Plugin],
+    contract: GoalContract,
+    *,
+    source: str,
+) -> tuple[Plugin, ...]:
+    """Validate explicitly supplied plugins against one goal contract."""
+    result = tuple(plugins)
+    for plugin in result:
+        _validate_goal_compatibility(plugin, contract, source=source)
+    return result
+
+
+def _policy_ids(values: Iterable[str]) -> frozenset[str]:
+    if isinstance(values, str):
+        raise TypeError("plugin IDs must be an iterable, not a string")
+    try:
+        result = frozenset(values)
+    except TypeError as error:
+        raise TypeError("plugin IDs must be iterable strings") from error
+    for plugin_id in result:
+        validate_global_identifier(plugin_id, label="plugin policy ID")
+    return result
 
 
 def _remove_namespace(namespace: str) -> None:

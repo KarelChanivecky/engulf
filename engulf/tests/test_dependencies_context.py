@@ -6,22 +6,24 @@ import tempfile
 import unittest
 import warnings
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from engulf_api import (
     ContextAccessError,
     DependencyPosition,
+    ElevationRequirement,
     MissingContextError,
-    Plugin,
     PluginDependency,
     PluginPhaseError,
     UnusedContextWarning,
 )
+from support import CoreTestPlugin, PassGoal
 
-from engulf import FRAMEWORK_ERROR_EXIT, Engulf, PluginDependencyError
+from engulf import FRAMEWORK_ERROR_EXIT, Application, PluginDependencyError
 
 
-class TestPlugin(Plugin):
+class TestPlugin(CoreTestPlugin):
     __test__ = False
 
     def __init__(
@@ -29,6 +31,7 @@ class TestPlugin(Plugin):
         plugin_id: str,
         *,
         priority: int = 50,
+        elevation_requirement: ElevationRequirement = ElevationRequirement.NONE,
         dependencies: tuple[PluginDependency, ...] = (),
         reads: frozenset[str] = frozenset(),
         writes: frozenset[str] = frozenset(),
@@ -38,6 +41,7 @@ class TestPlugin(Plugin):
     ) -> None:
         self.plugin_id = plugin_id
         self.priority = priority
+        self.elevation_requirement = elevation_requirement
         self.plugin_dependencies = dependencies
         self.context_reads = reads
         self.context_writes = writes
@@ -45,20 +49,22 @@ class TestPlugin(Plugin):
         self.after_action = after
         self.calls = calls
 
-    def help(self) -> str:
+    def help(self, api) -> str:
+        del api
         return self.plugin_id
 
-    def before_call(self, event, api) -> None:
+    def before_goal(self, event, api):
         if self.calls is not None:
             self.calls.append(f"{self.plugin_id}.before")
         if self.before_action is not None:
             self.before_action(event, api)
 
-    def after_call(self, event, api) -> None:
+    def after_goal(self, event, result, api):
         if self.calls is not None:
             self.calls.append(f"{self.plugin_id}.after")
         if self.after_action is not None:
             self.after_action(event, api)
+        return result
 
 
 class DependencyAndContextTestCase(unittest.TestCase):
@@ -67,13 +73,14 @@ class DependencyAndContextTestCase(unittest.TestCase):
         self.addCleanup(self.temporary_directory.cleanup)
         self.plugin_directory = Path(self.temporary_directory.name)
 
-    def make_engulf(self, *plugins: Plugin) -> Engulf:
+    def make_application(self, *plugins: CoreTestPlugin) -> Application:
         with patch(
-            "engulf.wrapper.load_directory_plugins", return_value=tuple(plugins)
+            "engulf.application.load_directory_plugins", return_value=tuple(plugins)
         ):
-            return Engulf(
-                "/bin/true",
+            return Application(
                 "engulf-dependency-context-tests",
+                PassGoal(),
+                display_name="engulf-dependency-context-tests",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
             )
@@ -88,7 +95,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
             calls=calls,
         )
 
-        app = self.make_engulf(dependent, required)
+        app = self.make_application(dependent, required)
         result = app.run([])
 
         self.assertEqual(result, 0)
@@ -124,7 +131,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
             ),
         )
 
-        app = self.make_engulf(required, dependent)
+        app = self.make_application(required, dependent)
 
         self.assertEqual(
             [plugin.plugin_id for plugin in app.plugins],
@@ -144,7 +151,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
             dependencies=(PluginDependency(first.plugin_id, postprocess=None),),
         )
 
-        app = self.make_engulf(first, blocked, independent)
+        app = self.make_application(first, blocked, independent)
 
         self.assertEqual(
             [plugin.plugin_id for plugin in app.plugins],
@@ -162,20 +169,20 @@ class DependencyAndContextTestCase(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"):
-            self.make_engulf(plugin)
+            self.make_application(plugin)
 
     def test_rejects_duplicate_self_and_duplicate_dependency_ids(self) -> None:
         duplicate_a = TestPlugin("tests.invalid.duplicate")
         duplicate_b = TestPlugin("tests.invalid.duplicate")
         with self.assertRaisesRegex(PluginDependencyError, "duplicate plugin_id"):
-            self.make_engulf(duplicate_a, duplicate_b)
+            self.make_application(duplicate_a, duplicate_b)
 
         self_dependent = TestPlugin(
             "tests.invalid.self",
             dependencies=(PluginDependency("tests.invalid.self"),),
         )
         with self.assertRaisesRegex(PluginDependencyError, "depend on itself"):
-            self.make_engulf(self_dependent)
+            self.make_application(self_dependent)
 
         required = TestPlugin("tests.invalid.required")
         repeated = TestPlugin(
@@ -186,7 +193,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
             ),
         )
         with self.assertRaisesRegex(PluginDependencyError, "more than once"):
-            self.make_engulf(required, repeated)
+            self.make_application(required, repeated)
 
     def test_reports_preprocess_and_postprocess_cycles(self) -> None:
         preprocess_a = TestPlugin(
@@ -200,7 +207,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
         with self.assertRaisesRegex(
             PluginDependencyError, "preprocess plugin dependency cycle"
         ):
-            self.make_engulf(preprocess_a, preprocess_b)
+            self.make_application(preprocess_a, preprocess_b)
 
         postprocess_a = TestPlugin(
             "tests.cycle.post_a",
@@ -225,17 +232,24 @@ class DependencyAndContextTestCase(unittest.TestCase):
         with self.assertRaisesRegex(
             PluginDependencyError, "postprocess plugin dependency cycle"
         ):
-            self.make_engulf(postprocess_a, postprocess_b)
+            self.make_application(postprocess_a, postprocess_b)
 
     def test_rejects_invalid_identity_and_context_metadata(self) -> None:
         with self.assertRaisesRegex(PluginDependencyError, "dot-qualified"):
-            self.make_engulf(TestPlugin("invalid"))
+            self.make_application(TestPlugin("invalid"))
 
         invalid_context = TestPlugin(
             "tests.invalid.context", reads=frozenset({"NOT.qualified"})
         )
         with self.assertRaisesRegex(PluginDependencyError, "context identifier"):
-            self.make_engulf(invalid_context)
+            self.make_application(invalid_context)
+
+        invalid_elevation = TestPlugin(
+            "tests.invalid.elevation",
+            elevation_requirement=cast(ElevationRequirement, "required"),
+        )
+        with self.assertRaisesRegex(PluginDependencyError, "elevation_requirement"):
+            self.make_application(invalid_elevation)
 
     def test_context_persists_through_both_phases_and_resets_per_call(self) -> None:
         context_id = "tests.context.value"
@@ -243,7 +257,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
 
         def before(event, api) -> None:
             observed.append(api.get_context(context_id, "missing"))
-            api.set_context(context_id, event.wrapper_args)
+            api.set_context(context_id, event.arguments)
 
         def after(event, api) -> None:
             observed.append(api.require_context(context_id))
@@ -255,7 +269,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
             before=before,
             after=after,
         )
-        app = self.make_engulf(plugin)
+        app = self.make_application(plugin)
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -292,7 +306,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            result = self.make_engulf(reader, second, first).run([])
+            result = self.make_application(reader, second, first).run([])
 
         self.assertEqual(result, 0)
         self.assertEqual(observed, ["two"])
@@ -314,7 +328,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            result = self.make_engulf(plugin).run([])
+            result = self.make_application(plugin).run([])
 
         self.assertEqual(result, 0)
         self.assertEqual(len(caught), 1)
@@ -336,7 +350,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
         )
 
         with self.assertWarnsRegex(UnusedContextWarning, context_id):
-            self.assertEqual(self.make_engulf(plugin).run([]), 0)
+            self.assertEqual(self.make_application(plugin).run([]), 0)
 
     def test_context_permissions_and_required_values_are_enforced(self) -> None:
         context_id = "tests.context.restricted"
@@ -348,7 +362,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
                 api.set_context(context_id, "value")
 
         permission_plugin = TestPlugin("tests.context.permissions", before=verify)
-        self.assertEqual(self.make_engulf(permission_plugin).run([]), 0)
+        self.assertEqual(self.make_application(permission_plugin).run([]), 0)
 
         missing_plugin = TestPlugin(
             "tests.context.required",
@@ -356,7 +370,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
             before=lambda event, api: api.require_context(context_id),
         )
         with contextlib.redirect_stderr(io.StringIO()):
-            result = self.make_engulf(missing_plugin).run([])
+            result = self.make_application(missing_plugin).run([])
         self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
 
         def catch_missing(event, api) -> None:
@@ -368,9 +382,9 @@ class DependencyAndContextTestCase(unittest.TestCase):
             reads=frozenset({context_id}),
             before=catch_missing,
         )
-        self.assertEqual(self.make_engulf(handled_plugin).run([]), 0)
+        self.assertEqual(self.make_application(handled_plugin).run([]), 0)
 
-    def test_api_is_closed_after_call_and_edits_are_preprocess_only(self) -> None:
+    def test_api_is_closed_after_invocation(self) -> None:
         retained = []
 
         def retain(event, api) -> None:
@@ -379,12 +393,10 @@ class DependencyAndContextTestCase(unittest.TestCase):
         plugin = TestPlugin(
             "tests.context.retained",
             before=retain,
-            after=lambda event, api: api.add("--too-late"),
         )
-        with contextlib.redirect_stderr(io.StringIO()):
-            result = self.make_engulf(plugin).run([])
+        result = self.make_application(plugin).run([])
 
-        self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
+        self.assertEqual(result, 0)
         with self.assertRaises(PluginPhaseError):
             retained[0].get_context("tests.context.anything")
 

@@ -1,48 +1,72 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Literal, overload
+from collections.abc import Iterable
+from contextlib import AbstractContextManager
+from typing import Literal, TypeVar, overload
 
-from .models import AdditionPlacement
+from .diagnostics import PluginLogger
+from .goals import AttributedContribution, GoalPhase
 from .state import StateScope, StateStore, WorkspaceState
 
 
-class PluginAPI(ABC):
-    """Call-scoped capabilities supplied to a plugin by Engulf."""
+class DiagnosticsAPI(ABC):
+    """Logging capability shared by every managed callback API."""
+
+    @property
+    @abstractmethod
+    def logger(self) -> PluginLogger:
+        """Return the initialized logger for the active callback."""
+
+
+class RegistrationAPI(DiagnosticsAPI):
+    """Capabilities available during one-time goal/plugin registration."""
+
+    @property
+    @abstractmethod
+    def elevated(self) -> bool:
+        """Return whether the application process is currently elevated."""
+
+
+class InvocationAPI(DiagnosticsAPI):
+    """Capabilities available during an active invocation callback."""
+
+    @property
+    @abstractmethod
+    def elevated(self) -> bool:
+        """Return whether the application process is currently elevated."""
 
     @abstractmethod
-    def remove(self, index: int) -> None:
-        """Remove one original argument during preprocessing."""
-
-    @abstractmethod
-    def remove_range(self, start: int, stop: int) -> None:
-        """Remove a half-open range of original arguments during preprocessing."""
-
-    @abstractmethod
-    def add(
+    def lease(
         self,
-        *args: str,
-        placement: AdditionPlacement = AdditionPlacement.BEFORE_SEPARATOR,
-    ) -> None:
-        """Add one atomic argument group during preprocessing."""
+        name: str,
+        *,
+        timeout: float | None = None,
+    ) -> AbstractContextManager[None]:
+        """Acquire one application/user-scoped external-resource lease."""
 
     @abstractmethod
-    def preempt(self, exit_code: int) -> None:
-        """Request binary preemption during preprocessing."""
+    def leases(
+        self,
+        names: Iterable[str],
+        *,
+        timeout: float | None = None,
+    ) -> AbstractContextManager[None]:
+        """Acquire several external-resource leases in deterministic order."""
 
     @abstractmethod
     def get_context(
         self, context_id: str, default: object | None = None
     ) -> object | None:
-        """Read declared context, returning a default when it is absent."""
+        """Read an allowed context value without requiring it to exist."""
 
     @abstractmethod
     def require_context(self, context_id: str) -> object:
-        """Read declared context or raise MissingContextError when absent."""
+        """Read an allowed context value or fail if it has not been written."""
 
     @abstractmethod
     def set_context(self, context_id: str, value: object) -> None:
-        """Create or overwrite declared context."""
+        """Create or replace an allowed context value."""
 
     @overload
     def state(self, scope: Literal[StateScope.WORKSPACE]) -> WorkspaceState: ...
@@ -52,8 +76,60 @@ class PluginAPI(ABC):
 
     @abstractmethod
     def state(self, scope: StateScope) -> StateStore:
-        """Return this plugin's store for the selected scope."""
+        """Return this participant's managed store for the selected scope."""
 
     @abstractmethod
     def known_workspaces(self) -> tuple[WorkspaceState, ...]:
-        """Return every centrally registered workspace owned by this plugin."""
+        """Return centrally registered workspaces owned by this participant."""
+
+
+class BeforeGoalAPI(InvocationAPI):
+    """Capabilities available to a plugin before goal execution."""
+
+
+class AfterGoalAPI(InvocationAPI):
+    """Capabilities available to a plugin after goal execution."""
+
+
+PluginT = TypeVar("PluginT")
+EventT = TypeVar("EventT")
+ContributionT = TypeVar("ContributionT")
+
+
+class GoalSetupAPI(RegistrationAPI):
+    """Goal setup logger plus typed setup-phase dispatch."""
+
+    @property
+    @abstractmethod
+    def application_id(self) -> str:
+        """Return the normalized application identifier."""
+
+    @property
+    @abstractmethod
+    def display_name(self) -> str:
+        """Return the application's command-facing display name."""
+
+    @property
+    @abstractmethod
+    def plugin_ids(self) -> tuple[str, ...]:
+        """Return active plugin IDs in preprocessing order."""
+
+    @abstractmethod
+    def dispatch(
+        self,
+        phase: GoalPhase[PluginT, EventT, RegistrationAPI, ContributionT],
+        event: EventT,
+    ) -> tuple[AttributedContribution[ContributionT], ...]:
+        """Call all goal plugins in the phase's declared order."""
+
+
+class GoalAPI(InvocationAPI):
+    """Goal-owned invocation capabilities plus typed plugin dispatch."""
+
+    @abstractmethod
+    def dispatch(
+        self,
+        phase: GoalPhase[PluginT, EventT, InvocationAPI, ContributionT],
+        event: EventT,
+    ) -> tuple[AttributedContribution[ContributionT], ...]:
+        """Call all goal plugins in the phase's declared order."""

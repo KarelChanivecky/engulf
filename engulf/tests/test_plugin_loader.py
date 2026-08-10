@@ -8,10 +8,61 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 from unittest.mock import patch
 
-from engulf_api import Plugin
+from engulf.plugin_loader import load_directory_plugins, normalize_application_id
+from engulf_api import (
+    Goal,
+    GoalAPI,
+    GoalContract,
+    GoalRequirement,
+    GoalResult,
+    Invocation,
+    Plugin,
+    PluginDependency,
+)
 
 import engulf
-from engulf import Engulf, PluginLoadError, plugin_entry_point_group
+from engulf import (
+    Application,
+    PluginDependencyError,
+    PluginLoadError,
+    PluginPolicy,
+    PluginPolicyMode,
+    application_plugin_entry_point_group,
+    goal_plugin_entry_point_group,
+)
+
+REQUIREMENT = GoalRequirement("tests.loader.goal", 1)
+
+
+class LoaderGoal(Goal[tuple[str, ...]]):
+    _contract = GoalContract(REQUIREMENT, Plugin)
+
+    @property
+    def contract(self) -> GoalContract:
+        return self._contract
+
+    def achieve(
+        self,
+        invocation: Invocation,
+        api: GoalAPI,
+    ) -> GoalResult[tuple[str, ...]]:
+        del api
+        return GoalResult.completed(invocation.arguments)
+
+
+class LoaderPlugin(Plugin):
+    goal_requirement = REQUIREMENT
+
+    def __init__(
+        self,
+        plugin_id: str,
+        *,
+        priority: int = 50,
+        dependencies: tuple[PluginDependency, ...] = (),
+    ) -> None:
+        self.plugin_id = plugin_id
+        self.priority = priority
+        self.plugin_dependencies = dependencies
 
 
 class PluginLoaderTestCase(unittest.TestCase):
@@ -21,222 +72,448 @@ class PluginLoaderTestCase(unittest.TestCase):
         self.directory = Path(self.temporary_directory.name)
         self.plugin_directory = self.directory / "plugins"
         self.plugin_directory.mkdir()
-
-    def write_plugin(self, name: str, source: str) -> Path:
-        path = self.plugin_directory / name
-        path.write_text(textwrap.dedent(source), encoding="utf-8")
-        return path
-
-    def local_app(self, plugin_dir: Path | None = None) -> Engulf:
-        return Engulf(
-            "echo",
-            "engulf-loader-tests",
-            plugin_dir=self.plugin_directory if plugin_dir is None else plugin_dir,
-            discover_installed=False,
-        )
-
-    def test_loads_instances_and_factories_in_filename_order(self) -> None:
-        self.write_plugin("_helper.py", 'VALUE = "from helper"\n')
-        self.write_plugin(
-            "a_factory.py",
-            """
-            from engulf_api import Plugin
-            from ._helper import VALUE
-
-            class FactoryPlugin(Plugin):
-                plugin_id = "tests.loader.factory"
-
-                def help(self):
-                    return f"factory {VALUE}"
-
-            def plugin():
-                return FactoryPlugin()
-            """,
-        )
-        self.write_plugin(
-            "b_instance.py",
-            """
-            from engulf_api import Plugin
-
-            class InstancePlugin(Plugin):
-                plugin_id = "tests.loader.instance"
-
-                def help(self):
-                    return "instance"
-
-            plugin = InstancePlugin()
-            """,
-        )
-
-        app = self.local_app()
-
-        self.assertEqual(
-            [plugin.help() for plugin in app.plugins],
-            ["factory from helper", "instance"],
-        )
-        self.assertEqual(app.plugin_directory, self.plugin_directory.resolve())
-
-    def test_private_modules_and_init_are_not_plugin_entries(self) -> None:
-        self.write_plugin("__init__.py", 'raise RuntimeError("must not execute")\n')
-        self.write_plugin("_private.py", 'raise RuntimeError("must not execute")\n')
-
-        self.assertEqual(self.local_app().plugins, ())
-
-    def test_empty_directory_is_valid(self) -> None:
-        self.assertEqual(self.local_app().plugins, ())
-
-    def test_rejects_missing_and_non_directory_paths(self) -> None:
-        missing = self.directory / "missing"
-        regular_file = self.directory / "file"
-        regular_file.write_text("", encoding="utf-8")
-
-        with self.assertRaisesRegex(PluginLoadError, "does not exist"):
-            self.local_app(missing)
-        with self.assertRaisesRegex(PluginLoadError, "not a directory"):
-            self.local_app(regular_file)
-
-    def test_rejects_invalid_plugin_filename(self) -> None:
-        self.write_plugin("bad-name.py", "plugin = None\n")
-
-        with self.assertRaisesRegex(PluginLoadError, "valid Python identifier"):
-            self.local_app()
-
-    def test_rejects_module_without_plugin_export(self) -> None:
-        path = self.write_plugin("missing_export.py", "VALUE = 1\n")
-
-        with self.assertRaisesRegex(
-            PluginLoadError, "does not export 'plugin'"
-        ) as caught:
-            self.local_app()
-        self.assertIn(str(path), str(caught.exception))
-
-    def test_rejects_invalid_plugin_exports(self) -> None:
-        invalid_sources = {
-            "not_callable.py": "plugin = 3\n",
-            "bad_factory.py": "def plugin():\n    return object()\n",
-        }
-
-        for name, source in invalid_sources.items():
-            with self.subTest(name=name):
-                path = self.write_plugin(name, source)
-                expected = (
-                    "zero-argument factory"
-                    if name == "not_callable.py"
-                    else "did not return a Plugin"
-                )
-                with self.assertRaisesRegex(PluginLoadError, expected):
-                    self.local_app()
-                path.unlink()
-
-    def test_rejects_non_integer_priority(self) -> None:
-        self.write_plugin(
-            "invalid_priority.py",
-            """
-            from engulf_api import Plugin
-
-            class InvalidPriorityPlugin(Plugin):
-                plugin_id = "tests.loader.invalid_priority"
-                priority = True
-
-                def help(self):
-                    return "invalid"
-
-            plugin = InvalidPriorityPlugin()
-            """,
-        )
-
-        with self.assertRaisesRegex(PluginLoadError, "priority.*must be an integer"):
-            self.local_app()
-
-    def test_wraps_import_and_factory_failures(self) -> None:
-        failures = {
-            "import_failure.py": (
-                'raise RuntimeError("import failed")\n',
-                "failed to import",
-            ),
-            "factory_failure.py": (
-                'def plugin():\n    raise RuntimeError("factory failed")\n',
-                "factory failed",
-            ),
-        }
-
-        for name, (source, expected) in failures.items():
-            with self.subTest(name=name):
-                path = self.write_plugin(name, source)
-                with self.assertRaisesRegex(PluginLoadError, expected) as caught:
-                    self.local_app()
-                self.assertIsInstance(caught.exception.__cause__, RuntimeError)
-                path.unlink()
-
-    def test_discovers_installed_plugins_for_normalized_application(self) -> None:
-        module = self.directory / "installed_plugins.py"
-        module.write_text(
+        self.module_name = "engulf_loader_installed_plugins"
+        (self.directory / f"{self.module_name}.py").write_text(
             textwrap.dedent(
                 """
-                from engulf_api import Plugin
+                from engulf_api import GoalRequirement, Plugin, PluginDependency
 
-                class AlphaPlugin(Plugin):
-                    plugin_id = "tests.loader.alpha"
-                    priority = -1
+                class CatalogPlugin(Plugin):
+                    goal_requirement = GoalRequirement("tests.loader.goal", 1)
 
-                    def help(self):
-                        return "alpha"
+                    def __init__(self, plugin_id, priority=50):
+                        self.plugin_id = plugin_id
+                        self.priority = priority
 
-                class ZuluPlugin(Plugin):
-                    plugin_id = "tests.loader.zulu"
-                    priority = 20
-
-                    def help(self):
-                        return "zulu"
-
-                alpha = AlphaPlugin
-                zulu = ZuluPlugin()
+                alpha = CatalogPlugin("tests.loader.alpha", 100)
+                beta = CatalogPlugin("tests.loader.beta", 50)
+                gamma = CatalogPlugin("tests.loader.gamma", 0)
+                transitive = CatalogPlugin("tests.loader.transitive")
+                required = CatalogPlugin("tests.loader.required")
+                required.plugin_dependencies = (
+                    PluginDependency(transitive.plugin_id),
+                )
+                dependent = CatalogPlugin("tests.loader.dependent")
+                dependent.plugin_dependencies = (
+                    PluginDependency(required.plugin_id),
+                )
+                incompatible = CatalogPlugin("tests.loader.incompatible")
+                incompatible.goal_requirement = GoalRequirement("tests.other.goal", 1)
                 """
             ),
             encoding="utf-8",
         )
-        group = "engulf.plugins.v1.acme_cli"
-        entries = (
-            EntryPoint("zulu", "installed_plugins:zulu", group),
-            EntryPoint("alpha", "installed_plugins:alpha", group),
-        )
+        self.addCleanup(sys.modules.pop, self.module_name, None)
+
+    def make_application(
+        self,
+        *,
+        application_id: str = "tests-loader-app",
+        policy: PluginPolicy | None = None,
+        entries: dict[str, tuple[EntryPoint, ...]] | None = None,
+        plugin_dir: Path | None = None,
+        discover_installed: bool = True,
+    ) -> Application:
+        mapping = {} if entries is None else entries
+
+        def discover(*, group: str):
+            return mapping.get(group, ())
 
         with (
-            patch(
-                "engulf.plugin_loader.entry_points", return_value=entries
-            ) as discover,
+            patch("engulf.plugin_loader.entry_points", side_effect=discover),
             patch.object(sys, "path", [str(self.directory), *sys.path]),
         ):
-            app = Engulf("echo", "Acme.CLI")
+            return Application(
+                application_id,
+                LoaderGoal(),
+                display_name="loader-app",
+                plugin_policy=policy,
+                plugin_dir=plugin_dir,
+                discover_installed=discover_installed,
+            )
 
-        self.addCleanup(sys.modules.pop, "installed_plugins", None)
-        discover.assert_called_once_with(group=group)
-        self.assertEqual(app.application_id, "acme-cli")
-        self.assertEqual(app.plugin_entry_point_group, group)
-        self.assertIsNone(app.plugin_directory)
-        self.assertEqual([plugin.help() for plugin in app.plugins], ["zulu", "alpha"])
+    @staticmethod
+    def catalog_entry(plugin_id: str, export: str) -> EntryPoint:
+        return EntryPoint(
+            plugin_id,
+            f"engulf_loader_installed_plugins:{export}",
+            goal_plugin_entry_point_group(REQUIREMENT.goal_id, REQUIREMENT.api_major),
+        )
 
-    def test_installed_plugin_load_failure_has_entry_point_context(self) -> None:
-        group = plugin_entry_point_group("broken-app")
-        entry = EntryPoint("broken", "missing_engulf_plugin:plugin", group)
+    @staticmethod
+    def application_entry(
+        application_id: str,
+        plugin_id: str,
+        export: str,
+    ) -> EntryPoint:
+        return EntryPoint(
+            plugin_id,
+            f"engulf_loader_installed_plugins:{export}",
+            application_plugin_entry_point_group(application_id),
+        )
 
+    def entries_for(
+        self,
+        application_id: str,
+        *,
+        catalog: tuple[EntryPoint, ...],
+        declarations: tuple[EntryPoint, ...] = (),
+    ) -> dict[str, tuple[EntryPoint, ...]]:
+        return {
+            goal_plugin_entry_point_group(
+                REQUIREMENT.goal_id,
+                REQUIREMENT.api_major,
+            ): catalog,
+            application_plugin_entry_point_group(application_id): declarations,
+        }
+
+    def test_identifier_and_entry_point_groups_are_stable(self) -> None:
+        self.assertEqual(normalize_application_id("Acme.CLI"), "acme-cli")
+        self.assertEqual(
+            application_plugin_entry_point_group("Acme.CLI"),
+            "engulf.plugins.v1.application.acme_cli",
+        )
+        self.assertEqual(
+            goal_plugin_entry_point_group("tests.loader.goal", 1),
+            "engulf.plugins.v1.goal.v1.tests_loader_goal",
+        )
+
+    def test_directory_loads_instances_and_factories_in_filename_order(self) -> None:
+        (self.plugin_directory / "alpha.py").write_text(
+            textwrap.dedent(
+                """
+                from engulf_api import GoalRequirement, Plugin
+
+                class Alpha(Plugin):
+                    plugin_id = "tests.directory.alpha"
+                    goal_requirement = GoalRequirement("tests.loader.goal", 1)
+
+                plugin = Alpha
+                """
+            ),
+            encoding="utf-8",
+        )
+        (self.plugin_directory / "zulu.py").write_text(
+            textwrap.dedent(
+                """
+                from engulf_api import GoalRequirement, Plugin
+
+                class Zulu(Plugin):
+                    plugin_id = "tests.directory.zulu"
+                    goal_requirement = GoalRequirement("tests.loader.goal", 1)
+
+                plugin = Zulu()
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        plugins = load_directory_plugins(self.plugin_directory)
+
+        self.assertEqual(
+            [plugin.plugin_id for plugin in plugins],
+            ["tests.directory.alpha", "tests.directory.zulu"],
+        )
+
+    def test_directory_rejects_invalid_paths_names_and_exports(self) -> None:
+        with self.assertRaisesRegex(PluginLoadError, "does not exist"):
+            load_directory_plugins(self.directory / "missing")
+        invalid = self.plugin_directory / "not-valid-name.py"
+        invalid.write_text("plugin = object()\n", encoding="utf-8")
+        with self.assertRaisesRegex(PluginLoadError, "valid Python identifier"):
+            load_directory_plugins(self.plugin_directory)
+        invalid.unlink()
+
+        (self.plugin_directory / "broken.py").write_text(
+            "value = 1\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(PluginLoadError, "does not export 'plugin'"):
+            load_directory_plugins(self.plugin_directory)
+
+    def test_default_policy_activates_either_side_declaration(self) -> None:
+        app_id = "tests-default-app"
+        alpha = self.catalog_entry("tests.loader.alpha", "alpha")
+        beta = self.catalog_entry("tests.loader.beta", "beta")
+        entries = self.entries_for(
+            app_id,
+            catalog=(alpha, beta),
+            declarations=(
+                self.application_entry(app_id, "tests.loader.alpha", "alpha"),
+            ),
+        )
+
+        application = self.make_application(
+            application_id=app_id,
+            policy=PluginPolicy.declared(include={"tests.loader.beta"}),
+            entries=entries,
+        )
+
+        self.assertEqual(
+            [plugin.plugin_id for plugin in application.plugins],
+            ["tests.loader.alpha", "tests.loader.beta"],
+        )
+
+    def test_one_plugin_can_declare_multiple_applications(self) -> None:
+        catalog = (self.catalog_entry("tests.loader.alpha", "alpha"),)
+        for app_id in ("tests-first-app", "tests-second-app"):
+            with self.subTest(application=app_id):
+                entries = self.entries_for(
+                    app_id,
+                    catalog=catalog,
+                    declarations=(
+                        self.application_entry(
+                            app_id,
+                            "tests.loader.alpha",
+                            "alpha",
+                        ),
+                    ),
+                )
+                application = self.make_application(
+                    application_id=app_id,
+                    entries=entries,
+                )
+                self.assertEqual(
+                    [plugin.plugin_id for plugin in application.plugins],
+                    ["tests.loader.alpha"],
+                )
+
+    def test_allowlist_and_blocklist_override_plugin_declarations(self) -> None:
+        app_id = "tests-policy-app"
+        catalog = (
+            self.catalog_entry("tests.loader.alpha", "alpha"),
+            self.catalog_entry("tests.loader.beta", "beta"),
+            self.catalog_entry("tests.loader.gamma", "gamma"),
+        )
+        declarations = (self.application_entry(app_id, "tests.loader.alpha", "alpha"),)
+        entries = self.entries_for(
+            app_id,
+            catalog=catalog,
+            declarations=declarations,
+        )
+
+        allowed = self.make_application(
+            application_id=app_id,
+            policy=PluginPolicy.allow_only({"tests.loader.beta"}),
+            entries=entries,
+        )
+        blocked = self.make_application(
+            application_id=app_id,
+            policy=PluginPolicy.allow_all_except({"tests.loader.beta"}),
+            entries=entries,
+        )
+
+        self.assertEqual(
+            [plugin.plugin_id for plugin in allowed.plugins],
+            ["tests.loader.beta"],
+        )
+        self.assertEqual(
+            [plugin.plugin_id for plugin in blocked.plugins],
+            ["tests.loader.alpha", "tests.loader.gamma"],
+        )
+
+    def test_allowlist_dependency_activation_is_explicit_by_default(self) -> None:
+        required = LoaderPlugin("tests.loader.required")
+        dependent = LoaderPlugin(
+            "tests.loader.dependent",
+            dependencies=(PluginDependency(required.plugin_id),),
+        )
         with (
-            patch("engulf.plugin_loader.entry_points", return_value=(entry,)),
-            self.assertRaisesRegex(PluginLoadError, "broken") as caught,
+            patch(
+                "engulf.application.load_directory_plugins",
+                return_value=(dependent, required),
+            ),
+            self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"),
         ):
-            Engulf("echo", "broken-app")
+            self.make_application(
+                policy=PluginPolicy.allow_only({dependent.plugin_id}),
+                plugin_dir=self.plugin_directory,
+                discover_installed=False,
+            )
 
-        self.assertIsInstance(caught.exception.__cause__, ModuleNotFoundError)
+    def test_allowlist_can_activate_transitive_dependencies_across_sources(
+        self,
+    ) -> None:
+        dependent_id = "tests.loader.dependent"
+        required_id = "tests.loader.required"
+        transitive_id = "tests.loader.transitive"
+        local_required = LoaderPlugin(
+            required_id,
+            dependencies=(PluginDependency(transitive_id),),
+        )
+        entries = self.entries_for(
+            "tests-loader-app",
+            catalog=(
+                self.catalog_entry(dependent_id, "dependent"),
+                self.catalog_entry(transitive_id, "transitive"),
+            ),
+        )
 
-    def test_rejects_invalid_application_identifier(self) -> None:
-        with self.assertRaisesRegex(ValueError, "application_id"):
-            Engulf("echo", "not an application!", discover_installed=False)
+        with patch(
+            "engulf.application.load_directory_plugins",
+            return_value=(local_required,),
+        ):
+            application = self.make_application(
+                policy=PluginPolicy.allow_only(
+                    {dependent_id},
+                    include_dependencies=True,
+                ),
+                entries=entries,
+                plugin_dir=self.plugin_directory,
+            )
 
-    def test_public_packages_have_separate_responsibilities(self) -> None:
-        self.assertIs(engulf.Engulf, Engulf)
+        self.assertEqual(
+            [plugin.plugin_id for plugin in application.plugins],
+            [transitive_id, required_id, dependent_id],
+        )
+
+    def test_implicit_allowlist_still_rejects_unavailable_dependencies(self) -> None:
+        dependent = LoaderPlugin(
+            "tests.loader.dependent",
+            dependencies=(PluginDependency("tests.loader.unavailable"),),
+        )
+        with (
+            patch(
+                "engulf.application.load_directory_plugins",
+                return_value=(dependent,),
+            ),
+            self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"),
+        ):
+            self.make_application(
+                policy=PluginPolicy.allow_only(
+                    {dependent.plugin_id},
+                    include_dependencies=True,
+                ),
+                plugin_dir=self.plugin_directory,
+                discover_installed=False,
+            )
+
+    def test_dependency_activation_policy_validation(self) -> None:
+        with self.assertRaisesRegex(TypeError, "must be a boolean"):
+            PluginPolicy.allow_only(
+                {"tests.loader.alpha"},
+                include_dependencies=1,  # type: ignore[arg-type]
+            )
+        with self.assertRaisesRegex(ValueError, "only by allowlist"):
+            PluginPolicy(
+                PluginPolicyMode.DECLARED,
+                frozenset(),
+                include_dependencies=True,
+            )
+
+    def test_missing_explicit_ids_are_optional(self) -> None:
+        application = self.make_application(
+            policy=PluginPolicy.allow_only({"tests.loader.missing"}),
+            entries={},
+        )
+        self.assertEqual(application.plugins, ())
+        self.assertEqual(
+            application.missing_policy_ids,
+            ("tests.loader.missing",),
+        )
+
+    def test_unselected_catalog_entry_is_not_imported(self) -> None:
+        marker = self.directory / "imported"
+        module = self.directory / "unselected_plugin.py"
+        module.write_text(
+            textwrap.dedent(
+                f"""
+                from pathlib import Path
+                Path({str(marker)!r}).write_text("imported", encoding="utf-8")
+                """
+            ),
+            encoding="utf-8",
+        )
+        group = goal_plugin_entry_point_group(
+            REQUIREMENT.goal_id,
+            REQUIREMENT.api_major,
+        )
+        entries = {
+            group: (
+                EntryPoint(
+                    "tests.loader.unselected",
+                    "unselected_plugin:plugin",
+                    group,
+                ),
+            ),
+        }
+
+        self.make_application(
+            policy=PluginPolicy.allow_only(()),
+            entries=entries,
+        )
+
+        self.assertFalse(marker.exists())
+
+    def test_application_policy_cannot_override_goal_compatibility(self) -> None:
+        app_id = "tests-incompatible-app"
+        entry = self.catalog_entry(
+            "tests.loader.incompatible",
+            "incompatible",
+        )
+        entries = self.entries_for(app_id, catalog=(entry,))
+        with self.assertRaisesRegex(PluginLoadError, "requires goal"):
+            self.make_application(
+                application_id=app_id,
+                policy=PluginPolicy.allow_only({"tests.loader.incompatible"}),
+                entries=entries,
+            )
+
+    def test_duplicate_catalog_ids_and_mismatched_declarations_fail(self) -> None:
+        app_id = "tests-invalid-catalog"
+        alpha = self.catalog_entry("tests.loader.alpha", "alpha")
+        duplicate = EntryPoint(
+            "tests.loader.alpha",
+            f"{self.module_name}:beta",
+            alpha.group,
+        )
+        with self.assertRaisesRegex(PluginLoadError, "duplicate plugin ID"):
+            self.make_application(
+                application_id=app_id,
+                entries=self.entries_for(app_id, catalog=(alpha, duplicate)),
+            )
+
+        mismatch = self.application_entry(
+            app_id,
+            "tests.loader.alpha",
+            "beta",
+        )
+        with self.assertRaisesRegex(PluginLoadError, "does not match"):
+            self.make_application(
+                application_id=app_id,
+                entries=self.entries_for(
+                    app_id,
+                    catalog=(alpha,),
+                    declarations=(mismatch,),
+                ),
+            )
+
+    def test_dependency_validation_still_applies_after_policy(self) -> None:
+        required = LoaderPlugin("tests.loader.required")
+        dependent = LoaderPlugin(
+            "tests.loader.dependent",
+            dependencies=(PluginDependency(required.plugin_id),),
+        )
+        with (
+            patch(
+                "engulf.application.load_directory_plugins",
+                return_value=(dependent, required),
+            ),
+            self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"),
+        ):
+            Application(
+                "tests-directory-policy",
+                LoaderGoal(),
+                display_name="loader-app",
+                plugin_policy=PluginPolicy.allow_only({dependent.plugin_id}),
+                plugin_dir=self.plugin_directory,
+                discover_installed=False,
+            )
+
+    def test_public_packages_do_not_export_old_wrapper_contracts(self) -> None:
+        self.assertIs(engulf.Application, Application)
+        self.assertFalse(hasattr(engulf, "Engulf"))
         self.assertFalse(hasattr(engulf, "Plugin"))
-        self.assertFalse(hasattr(engulf, "Wrapper"))
-        self.assertTrue(issubclass(Plugin, object))
 
 
 if __name__ == "__main__":

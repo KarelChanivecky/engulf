@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from engulf_api import Shell
+from engulf_executable_wrapper_api import Shell
 
 from .completion import render_completion_script
 
@@ -56,8 +56,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     try:
         description = json.loads(result.stdout)
+        if not isinstance(description, dict):
+            raise TypeError("wrapper description must be a JSON object")
         binary_service = description["completion_service"]
-    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        if not isinstance(binary_service, str):
+            raise TypeError("completion_service must be a string")
+        if not binary_service or "\0" in binary_service:
+            raise ValueError("completion_service must be nonempty and contain no NUL")
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         print(
             f"engulf-completion: invalid wrapper description: {error}", file=sys.stderr
         )

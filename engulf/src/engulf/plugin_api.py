@@ -1,178 +1,127 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum, auto
-from pathlib import Path
-from typing import Literal, overload
+import logging
+from collections.abc import Callable, Iterable
+from contextlib import AbstractContextManager
+from typing import Any, Literal, overload
 
 from engulf_api import (
-    AdditionPlacement,
-    ContextAccessError,
-    MissingContextError,
-    PluginAPI,
-    PluginPhaseError,
+    AfterGoalAPI,
+    AttributedContribution,
+    BeforeGoalAPI,
+    GoalAPI,
+    GoalPhase,
+    InvocationAPI,
+    PluginLogger,
     StateScope,
     StateStore,
     WorkspaceState,
 )
 
-from .state import CallStateManager, RuntimeStateStore, RuntimeWorkspaceState
+from ._capabilities import (
+    InvocationContextTable,
+    _ActivationState,
+    _ContextCapabilities,
+    _LockCoordinator,
+    _StateCapabilities,
+)
+from .state import InvocationStateManager
+
+__all__ = ["InvocationContextTable", "RuntimeGoalAPI", "RuntimePluginAPI"]
+
+type _Dispatch = Callable[
+    [GoalPhase[Any, Any, InvocationAPI, Any], Any],
+    tuple[AttributedContribution[Any], ...],
+]
 
 
-@dataclass(frozen=True, slots=True)
-class Addition:
-    args: tuple[str, ...]
-    placement: AdditionPlacement
-
-
-@dataclass(frozen=True, slots=True)
-class PluginContribution:
-    removals: frozenset[int]
-    additions: tuple[Addition, ...]
-    preemption: int | None
-
-
-class _HookPhase(Enum):
-    INACTIVE = auto()
-    PREPROCESS = auto()
-    POSTPROCESS = auto()
-    CLOSED = auto()
-
-
-class CallContextTable:
-    """Shared, lazily populated context for one wrapped call."""
-
-    def __init__(self) -> None:
-        self._values: dict[str, object] = {}
-        self._written: set[str] = set()
-        self._read: set[str] = set()
-
-    def get(self, context_id: str, default: object | None) -> object | None:
-        if context_id not in self._values:
-            return default
-        self._read.add(context_id)
-        return self._values[context_id]
-
-    def require(self, context_id: str) -> object:
-        if context_id not in self._values:
-            raise MissingContextError(f"context has not been written: {context_id}")
-        self._read.add(context_id)
-        return self._values[context_id]
-
-    def set(self, context_id: str, value: object) -> None:
-        self._values[context_id] = value
-        self._written.add(context_id)
-
-    @property
-    def unused_ids(self) -> tuple[str, ...]:
-        return tuple(sorted(self._written - self._read))
-
-
-class RuntimePluginAPI(PluginAPI):
-    """Plugin-specific capability view over one call's shared state."""
+class RuntimePluginAPI(BeforeGoalAPI, AfterGoalAPI):
+    """Participant-specific facade over callback-bound invocation capabilities."""
 
     def __init__(
         self,
         *,
-        plugin_id: str,
-        argument_count: int,
-        context_reads: frozenset[str],
-        context_writes: frozenset[str],
-        context_table: CallContextTable,
-        state_manager: CallStateManager,
+        participant_id: str,
+        context_reads: frozenset[str] | None,
+        context_writes: frozenset[str] | None,
+        context_table: InvocationContextTable,
+        state_manager: InvocationStateManager,
+        diagnostic_logger: logging.Logger,
+        elevated: bool,
     ) -> None:
-        self._plugin_id = plugin_id
-        self._argument_count = argument_count
-        self._context_reads = context_reads
-        self._context_writes = context_writes
-        self._context_table = context_table
-        self._state_manager = state_manager
-        self._phase = _HookPhase.INACTIVE
-        self._removals: set[int] = set()
-        self._additions: list[Addition] = []
-        self._preemption: int | None = None
-        self._user_state: RuntimeStateStore | None = None
-        self._workspace_state: RuntimeWorkspaceState | None = None
-        self._known_workspace_states: dict[Path, RuntimeWorkspaceState] = {}
-
-    def activate_preprocess(self) -> None:
-        self._activate(_HookPhase.PREPROCESS)
-
-    def activate_postprocess(self) -> None:
-        self._activate(_HookPhase.POSTPROCESS)
-
-    def deactivate(self) -> None:
-        if self._phase is not _HookPhase.CLOSED:
-            self._phase = _HookPhase.INACTIVE
-
-    def close(self) -> None:
-        self._phase = _HookPhase.CLOSED
-
-    def freeze(self) -> PluginContribution:
-        return PluginContribution(
-            removals=frozenset(self._removals),
-            additions=tuple(self._additions),
-            preemption=self._preemption,
+        if type(elevated) is not bool:
+            raise TypeError("elevated must be a boolean")
+        self._elevated = elevated
+        self._activation = _ActivationState(participant_id, diagnostic_logger)
+        self._locks = _LockCoordinator(self._activation, state_manager)
+        self._contexts = _ContextCapabilities(
+            participant_id,
+            context_reads,
+            context_writes,
+            context_table,
+            self._activation.require_active,
+        )
+        self._state = _StateCapabilities(
+            participant_id,
+            state_manager,
+            self._activation.require_active,
+            self._locks.transaction,
         )
 
-    def remove(self, index: int) -> None:
-        self._require_preprocess("remove")
-        if not isinstance(index, int):
-            raise TypeError("argument index must be an integer")
-        if index < 0 or index >= self._argument_count:
-            raise IndexError(f"argument index {index} is out of range")
-        self._removals.add(index)
+    def activate(self, phase: str) -> None:
+        self._activation.activate(phase)
 
-    def remove_range(self, start: int, stop: int) -> None:
-        self._require_preprocess("remove_range")
-        if not isinstance(start, int) or not isinstance(stop, int):
-            raise TypeError("argument range bounds must be integers")
-        if start < 0 or stop < start or stop > self._argument_count:
-            raise IndexError(f"argument range [{start}, {stop}) is out of range")
-        self._removals.update(range(start, stop))
+    def deactivate(self) -> None:
+        if self._activation.closed:
+            return
+        try:
+            self._locks.release_active()
+        finally:
+            self._activation.deactivate()
 
-    def add(
+    def close(self) -> None:
+        try:
+            self._locks.release_active()
+        finally:
+            self._activation.close()
+
+    @property
+    def logger(self) -> PluginLogger:
+        return self._activation.logger
+
+    @property
+    def elevated(self) -> bool:
+        self._activation.require_active("elevated")
+        return self._elevated
+
+    def lease(
         self,
-        *args: str,
-        placement: AdditionPlacement = AdditionPlacement.BEFORE_SEPARATOR,
-    ) -> None:
-        self._require_preprocess("add")
-        if not args:
-            raise ValueError("an added argument group cannot be empty")
-        if any(not isinstance(arg, str) for arg in args):
-            raise TypeError("added arguments must be strings")
-        if any("\0" in arg for arg in args):
-            raise ValueError("arguments cannot contain NUL characters")
-        if not isinstance(placement, AdditionPlacement):
-            raise TypeError("placement must be an AdditionPlacement")
-        self._additions.append(Addition(tuple(args), placement))
+        name: str,
+        *,
+        timeout: float | None = None,
+    ) -> AbstractContextManager[None]:
+        return self._locks.lease(name, timeout=timeout)
 
-    def preempt(self, exit_code: int) -> None:
-        self._require_preprocess("preempt")
-        if not isinstance(exit_code, int) or isinstance(exit_code, bool):
-            raise TypeError("exit code must be an integer")
-        if exit_code < 0 or exit_code > 255:
-            raise ValueError("exit code must be between 0 and 255")
-        if self._preemption is not None:
-            raise RuntimeError("a plugin can preempt a call only once")
-        self._preemption = exit_code
+    def leases(
+        self,
+        names: Iterable[str],
+        *,
+        timeout: float | None = None,
+    ) -> AbstractContextManager[None]:
+        return self._locks.leases(names, timeout=timeout)
 
     def get_context(
-        self, context_id: str, default: object | None = None
+        self,
+        context_id: str,
+        default: object | None = None,
     ) -> object | None:
-        self._require_active("get_context")
-        self._require_context_access(context_id, self._context_reads, "read")
-        return self._context_table.get(context_id, default)
+        return self._contexts.get(context_id, default)
 
     def require_context(self, context_id: str) -> object:
-        self._require_active("require_context")
-        self._require_context_access(context_id, self._context_reads, "read")
-        return self._context_table.require(context_id)
+        return self._contexts.require(context_id)
 
     def set_context(self, context_id: str, value: object) -> None:
-        self._require_active("set_context")
-        self._require_context_access(context_id, self._context_writes, "write")
-        self._context_table.set(context_id, value)
+        self._contexts.set(context_id, value)
 
     @overload
     def state(self, scope: Literal[StateScope.WORKSPACE]) -> WorkspaceState: ...
@@ -181,61 +130,28 @@ class RuntimePluginAPI(PluginAPI):
     def state(self, scope: Literal[StateScope.USER]) -> StateStore: ...
 
     def state(self, scope: StateScope) -> StateStore:
-        self._require_active("state")
-        if not isinstance(scope, StateScope):
-            raise TypeError("scope must be a StateScope")
-        if scope is StateScope.USER:
-            if self._user_state is None:
-                self._user_state = RuntimeStateStore(
-                    self._state_manager.user_backend(self._plugin_id),
-                    self._require_active,
-                )
-            return self._user_state
-
-        if self._workspace_state is None:
-            self._workspace_state = RuntimeWorkspaceState(
-                self._state_manager.current_workspace_backend(self._plugin_id),
-                self._require_active,
-            )
-            self._known_workspace_states[self._workspace_state.root] = (
-                self._workspace_state
-            )
-        return self._workspace_state
+        return self._state.state(scope)
 
     def known_workspaces(self) -> tuple[WorkspaceState, ...]:
-        self._require_active("known_workspaces")
-        states: list[RuntimeWorkspaceState] = []
-        for backend in self._state_manager.known_workspace_backends(self._plugin_id):
-            state = self._known_workspace_states.get(backend.root)
-            if state is None:
-                state = RuntimeWorkspaceState(backend, self._require_active)
-                self._known_workspace_states[backend.root] = state
-            states.append(state)
-        return tuple(states)
-
-    def _activate(self, phase: _HookPhase) -> None:
-        if self._phase is _HookPhase.CLOSED:
-            raise PluginPhaseError(f"PluginAPI for {self._plugin_id} is closed")
-        if self._phase is not _HookPhase.INACTIVE:
-            raise PluginPhaseError(f"PluginAPI for {self._plugin_id} is already active")
-        self._phase = phase
+        return self._state.known_workspaces()
 
     def _require_active(self, operation: str) -> None:
-        if self._phase not in {_HookPhase.PREPROCESS, _HookPhase.POSTPROCESS}:
-            raise PluginPhaseError(
-                f"{operation} is unavailable outside an active plugin hook"
-            )
+        self._activation.require_active(operation)
 
-    def _require_preprocess(self, operation: str) -> None:
-        if self._phase is not _HookPhase.PREPROCESS:
-            raise PluginPhaseError(
-                f"{operation} is available only during preprocessing"
-            )
 
-    def _require_context_access(
-        self, context_id: str, allowed: frozenset[str], operation: str
-    ) -> None:
-        if not isinstance(context_id, str) or context_id not in allowed:
-            raise ContextAccessError(
-                f"plugin {self._plugin_id} may not {operation} context {context_id!r}"
-            )
+class RuntimeGoalAPI(RuntimePluginAPI, GoalAPI):
+    """Goal-owned capabilities with access to runtime phase dispatch."""
+
+    def __init__(self, *, dispatch: _Dispatch, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._dispatch = dispatch
+
+    def dispatch(
+        self,
+        phase: GoalPhase[Any, Any, InvocationAPI, Any],
+        event: Any,
+    ) -> tuple[AttributedContribution[Any], ...]:
+        self._require_active("dispatch")
+        if not isinstance(phase, GoalPhase):
+            raise TypeError("phase must be a GoalPhase")
+        return self._dispatch(phase, event)
