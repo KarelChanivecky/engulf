@@ -156,6 +156,7 @@ class ApplicationTestCase(unittest.TestCase):
                 display_name="test-application",
                 vendor="Engulf Tests",
                 product="Application Tests",
+                short_product_name="Application",
                 version="0.test",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
@@ -205,9 +206,11 @@ class ApplicationTestCase(unittest.TestCase):
             display_name="test-application",
             vendor="Engulf Tests",
             product="Application Tests",
+            short_product_name="Application",
             version="0.test",
         )
         self.assertEqual(application.application_metadata, expected_metadata)
+        self.assertEqual(application.short_product_name, "Application")
         self.assertEqual(goal.setup_application, expected_metadata)
         self.assertEqual(goal.achieve_application, expected_metadata)
         self.assertEqual(
@@ -511,6 +514,7 @@ class ApplicationTestCase(unittest.TestCase):
                 display_name="test-application",
                 vendor="Engulf Tests",
                 product="Application Tests",
+                short_product_name="Application",
                 version="0.test",
                 required_plugin_ids=("tests.application.required",),
                 plugin_dir=self.plugin_directory,

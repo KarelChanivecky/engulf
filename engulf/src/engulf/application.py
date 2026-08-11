@@ -83,6 +83,7 @@ class Application[ResultT]:
         display_name: str,
         vendor: str,
         product: str,
+        short_product_name: str,
         version: str,
         plugin_policy: PluginPolicy | None = None,
         required_plugin_ids: Iterable[str] = (),
@@ -122,6 +123,7 @@ class Application[ResultT]:
             display_name=self._display_name,
             vendor=vendor,
             product=product,
+            short_product_name=short_product_name,
             version=version,
         )
         self._goal = goal
@@ -262,6 +264,10 @@ class Application[ResultT]:
     @property
     def product(self) -> str:
         return self._application_metadata.product
+
+    @property
+    def short_product_name(self) -> str:
+        return self._application_metadata.short_product_name
 
     @property
     def version(self) -> str:

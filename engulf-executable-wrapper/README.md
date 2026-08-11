@@ -19,6 +19,7 @@ application = Application(
     display_name="clab",
     vendor="Example Corp",
     product="Containerlab Wrapper",
+    short_product_name="clab",
     version="1.0.0",
     plugin_policy=PluginPolicy.declared(),
 )

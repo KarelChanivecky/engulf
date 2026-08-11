@@ -10,6 +10,7 @@ ENCRYPTION_APPLICATION = ApplicationDefinition(
     goal_factory=EncryptionGoal,
     vendor="Engulf",
     product="Encryption Example",
+    short_product_name="Encrypt",
     version="0.1.0",
 )
 

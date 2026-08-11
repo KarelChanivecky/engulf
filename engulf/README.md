@@ -25,6 +25,7 @@ REPORT_APPLICATION = ApplicationDefinition(
     goal_factory=ReportGoal,
     vendor="Example Corp",
     product="Report CLI",
+    short_product_name="Report",
     version="1.4.0",
     plugin_policy=PluginPolicy.declared(
         include={"com.example.shared.audit"},
@@ -73,6 +74,7 @@ VENDOR_REPORT = REPORT_APPLICATION.edition(
     display_name="vendor-report",
     vendor="Vendor Corp",
     product="Vendor Report",
+    short_product_name="VReport",
     version="1.4.0-vendor.2",
     include_plugins={"com.vendor.optional-export"},
     require_plugins={"com.vendor.policy"},
@@ -96,6 +98,7 @@ INDEPENDENT_REPORT = REPORT_APPLICATION.fork(
     display_name="vendor-report",
     vendor="Vendor Corp",
     product="Vendor Report",
+    short_product_name="VReport",
     version="2.0.0",
     inherit_declarations=True,
 )
@@ -118,10 +121,11 @@ into declared and allowlist policies and removes IDs from blocklist exclusions.
 Blocklist exclusions are therefore defaults an edition may override, not a security
 denylist.
 
-Vendor, product, version, and display name are descriptive metadata. They never
-replace `application_id` in discovery, state, lease, compatibility, elevation, or
-trust decisions. Applications expose the same value as `application_metadata` and
-convenience `vendor`, `product`, and `version` properties.
+Vendor, product, short product name, version, and display name are descriptive
+metadata. They never replace `application_id` in discovery, state, lease,
+compatibility, elevation, or trust decisions. Applications expose the same value as
+`application_metadata` and convenience `vendor`, `product`, `short_product_name`,
+and `version` properties.
 
 `application.active_plugins` and its `application.plugins` alias return immutable
 `ActivePlugin` descriptors, never live implementation objects. Each descriptor

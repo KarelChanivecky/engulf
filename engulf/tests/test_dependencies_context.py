@@ -83,6 +83,7 @@ class DependencyAndContextTestCase(unittest.TestCase):
                 display_name="engulf-dependency-context-tests",
                 vendor="Engulf Tests",
                 product="Dependency Context Tests",
+                short_product_name="Dependencies",
                 version="0.test",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,

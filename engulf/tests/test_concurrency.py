@@ -61,6 +61,7 @@ def _make_runtime(
             display_name="engulf-concurrency-tests",
             vendor="Engulf Tests",
             product="Concurrency Tests",
+            short_product_name="Concurrency",
             version="0.test",
         ),
         elevated=False,

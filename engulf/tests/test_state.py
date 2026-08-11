@@ -76,6 +76,7 @@ class StateTestCase(unittest.TestCase):
                 display_name="engulf-state-tests",
                 vendor="Engulf Tests",
                 product="State Tests",
+                short_product_name="State",
                 version="0.test",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,

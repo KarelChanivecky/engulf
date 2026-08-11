@@ -48,6 +48,7 @@ APPLICATION = ApplicationDefinition(
     goal_factory=MyGoal,
     vendor="Example Corp",
     product="Example App",
+    short_product_name="Example",
     version="1.0.0",
     plugin_policy=PluginPolicy.declared(),
 )
@@ -62,7 +63,8 @@ Treat `application_id` as persistent compatibility and state metadata. Changing 
 changes application entry-point discovery, state location, and lease identity.
 `display_name` controls diagnostics and reserved logging option names.
 Every callback receives immutable `api.application` metadata containing technical
-`application_id` and descriptive `display_name`, `vendor`, `product`, and `version`.
+`application_id` and descriptive `display_name`, `vendor`, `product`,
+`short_product_name`, and `version`.
 Plugins may derive presentation or external naming conventions from the descriptive
 fields, but must never use them for compatibility, state, leases, elevation, trust,
 or authorization.

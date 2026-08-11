@@ -25,6 +25,7 @@ VENDOR_APPLICATION = ENCRYPTION_APPLICATION.edition(
     display_name="vendor-encrypt",
     vendor="Vendor Corp",
     product="Vendor Encrypt",
+    short_product_name="VEncrypt",
     version="0.1.0-vendor.1",
     require_plugins={"com.vendor.encryption-policy"},
 )

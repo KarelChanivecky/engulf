@@ -60,11 +60,13 @@ class ApiTestCase(unittest.TestCase):
             display_name="example-app",
             vendor="Example Corp",
             product="Example App",
+            short_product_name="Example",
             version="1.2.3+vendor.1",
         )
 
         self.assertEqual(metadata.vendor, "Example Corp")
         self.assertEqual(metadata.product, "Example App")
+        self.assertEqual(metadata.short_product_name, "Example")
         self.assertEqual(metadata.version, "1.2.3+vendor.1")
         with self.assertRaises(TypeError):
             ApplicationMetadata(  # type: ignore[misc]
@@ -77,6 +79,7 @@ class ApiTestCase(unittest.TestCase):
         for field, value in (
             ("vendor", ""),
             ("product", " surrounding "),
+            ("short_product_name", ""),
             ("version", "1.0\nforged"),
         ):
             with self.subTest(field=field), self.assertRaises(ValueError):
@@ -85,6 +88,9 @@ class ApiTestCase(unittest.TestCase):
                     display_name="example-app",
                     vendor="Example Corp" if field != "vendor" else value,
                     product="Example App" if field != "product" else value,
+                    short_product_name=(
+                        "Example" if field != "short_product_name" else value
+                    ),
                     version="1.0" if field != "version" else value,
                 )
 

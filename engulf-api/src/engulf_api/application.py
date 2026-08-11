@@ -11,6 +11,7 @@ class ApplicationMetadata:
     display_name: str
     vendor: str
     product: str
+    short_product_name: str
     version: str
 
     def __post_init__(self) -> None:
@@ -19,6 +20,7 @@ class ApplicationMetadata:
             ("display_name", self.display_name),
             ("vendor", self.vendor),
             ("product", self.product),
+            ("short_product_name", self.short_product_name),
             ("version", self.version),
         ):
             _validate_metadata_text(value, field=field)

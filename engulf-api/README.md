@@ -83,16 +83,19 @@ api.logger.info(
 ```
 
 `ApplicationMetadata` contains `application_id`, `display_name`, `vendor`, `product`,
-and `version`. Plugins may use the descriptive fields to derive presentation,
-environment-variable prefixes, and other application-facing conventions. Values
-are nonempty strings without surrounding whitespace or control characters; plugins
-remain responsible for any stricter normalization required by an external format.
+`short_product_name`, and `version`. `product` is the full presentation name, while
+`short_product_name` is its concise presentation counterpart. Plugins may use the
+descriptive fields to derive presentation, environment-variable prefixes, and other
+application-facing conventions. Values are nonempty strings without surrounding
+whitespace or control characters; plugins remain responsible for any stricter
+normalization required by an external format.
 
-Only `application_id` is technical identity. Vendor, product, version, and
-display name do not affect goal compatibility, state paths, lease identity,
-elevation, activation, or trust. The API property is callback-bound, although the
-returned frozen metadata value may be retained. `GoalSetupAPI.application_id` and
-`display_name` remain convenience aliases for the corresponding metadata fields.
+Only `application_id` is technical identity. Vendor, product, short product name,
+version, and display name do not affect goal compatibility, state paths, lease
+identity, elevation, activation, or trust. The API property is callback-bound,
+although the returned frozen metadata value may be retained.
+`GoalSetupAPI.application_id` and `display_name` remain convenience aliases for the
+corresponding metadata fields.
 
 ## Plugin Lifecycle
 

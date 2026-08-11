@@ -27,6 +27,7 @@ class ApplicationDefinition[ResultT]:
     goal_factory: GoalFactory[ResultT]
     vendor: str
     product: str
+    short_product_name: str
     version: str
     plugin_policy: PluginPolicy = field(default_factory=PluginPolicy.declared)
     required_plugin_ids: frozenset[str] = frozenset()
@@ -63,6 +64,7 @@ class ApplicationDefinition[ResultT]:
             display_name=display_name,
             vendor=self.vendor,
             product=self.product,
+            short_product_name=self.short_product_name,
             version=self.version,
         )
         object.__setattr__(self, "application_id", application_id)
@@ -89,6 +91,7 @@ class ApplicationDefinition[ResultT]:
             display_name=self.display_name,
             vendor=self.vendor,
             product=self.product,
+            short_product_name=self.short_product_name,
             version=self.version,
         )
 
@@ -98,6 +101,7 @@ class ApplicationDefinition[ResultT]:
         display_name: str,
         vendor: str | None = None,
         product: str | None = None,
+        short_product_name: str | None = None,
         version: str | None = None,
         include_plugins: Iterable[str] = (),
         require_plugins: Iterable[str] = (),
@@ -110,6 +114,11 @@ class ApplicationDefinition[ResultT]:
             display_name=display_name,
             vendor=self.vendor if vendor is None else vendor,
             product=self.product if product is None else product,
+            short_product_name=(
+                self.short_product_name
+                if short_product_name is None
+                else short_product_name
+            ),
             version=self.version if version is None else version,
             plugin_policy=policy,
             required_plugin_ids=self.required_plugin_ids | required_ids,
@@ -122,6 +131,7 @@ class ApplicationDefinition[ResultT]:
         display_name: str,
         vendor: str | None = None,
         product: str | None = None,
+        short_product_name: str | None = None,
         version: str | None = None,
         include_plugins: Iterable[str] = (),
         require_plugins: Iterable[str] = (),
@@ -141,6 +151,11 @@ class ApplicationDefinition[ResultT]:
             display_name=display_name,
             vendor=self.vendor if vendor is None else vendor,
             product=self.product if product is None else product,
+            short_product_name=(
+                self.short_product_name
+                if short_product_name is None
+                else short_product_name
+            ),
             version=self.version if version is None else version,
             plugin_policy=policy,
             required_plugin_ids=self.required_plugin_ids | required_ids,
@@ -160,6 +175,7 @@ class ApplicationDefinition[ResultT]:
             display_name=self.display_name,
             vendor=self.vendor,
             product=self.product,
+            short_product_name=self.short_product_name,
             version=self.version,
             plugin_policy=self.plugin_policy,
             required_plugin_ids=self.required_plugin_ids,

@@ -76,6 +76,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
             goal_factory=create_goal,
             vendor="Engulf Tests",
             product="Definition Tests",
+            short_product_name="Definition",
             version="0.test",
         )
 
@@ -99,6 +100,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
             goal_factory=DefinitionGoal,
             vendor="Base Vendor",
             product="Base Product",
+            short_product_name="Base",
             version="1.0",
             plugin_policy=PluginPolicy.declared(
                 include={"tests.definition.base-optional"}
@@ -111,6 +113,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
             display_name="vendor-app",
             vendor="Vendor Corp",
             product="Vendor Product",
+            short_product_name="Vendor",
             version="2.0-vendor",
             include_plugins={"tests.definition.vendor-optional"},
             require_plugins={"tests.definition.vendor-required"},
@@ -120,6 +123,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
         self.assertEqual(edition.display_name, "vendor-app")
         self.assertEqual(edition.vendor, "Vendor Corp")
         self.assertEqual(edition.product, "Vendor Product")
+        self.assertEqual(edition.short_product_name, "Vendor")
         self.assertEqual(edition.version, "2.0-vendor")
         self.assertEqual(edition.application_metadata.vendor, edition.vendor)
         self.assertIs(edition.goal_factory, base.goal_factory)
@@ -155,12 +159,14 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
             goal_factory=DefinitionGoal,
             vendor="Base Vendor",
             product="Base Product",
+            short_product_name="Base",
             version="1.0",
         )
         edition = base.edition(
             display_name="vendor-app",
             vendor="Vendor Corp",
             product="Vendor Product",
+            short_product_name="Vendor",
             version="2.0",
         )
 
@@ -172,6 +178,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
             )
             self.assertEqual(application.vendor, "Vendor Corp")
             self.assertEqual(application.product, "Vendor Product")
+            self.assertEqual(application.short_product_name, "Vendor")
             self.assertEqual(application.version, "2.0")
             self.assertEqual(application.invoke(()).value, "vendor-app")
 
@@ -182,6 +189,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
             goal_factory=DefinitionGoal,
             vendor="Base Vendor",
             product="Base Product",
+            short_product_name="Base",
             version="1.0",
             plugin_policy=PluginPolicy.allow_all_except(
                 {"tests.definition.blocked", "tests.definition.still-blocked"}
@@ -199,6 +207,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
         )
         self.assertEqual(edition.vendor, base.vendor)
         self.assertEqual(edition.product, base.product)
+        self.assertEqual(edition.short_product_name, base.short_product_name)
         self.assertEqual(edition.version, base.version)
 
     def test_fork_isolates_identity_and_inherits_declarations_only_by_opt_in(
@@ -210,6 +219,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
             goal_factory=DefinitionGoal,
             vendor="Base Vendor",
             product="Base Product",
+            short_product_name="Base",
             version="1.0",
             plugin_declaration_application_ids=("tests.definition.ancestor",),
         )
@@ -222,6 +232,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
             application_id="tests.definition.inherited-fork",
             display_name="inherited-fork",
             vendor="Fork Vendor",
+            short_product_name="Fork",
             inherit_declarations=True,
         )
 
@@ -240,7 +251,9 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
         self.assertNotEqual(isolated.application_id, base.application_id)
         self.assertNotEqual(inherited.application_id, base.application_id)
         self.assertEqual(isolated.vendor, base.vendor)
+        self.assertEqual(isolated.short_product_name, base.short_product_name)
         self.assertEqual(inherited.vendor, "Fork Vendor")
+        self.assertEqual(inherited.short_product_name, "Fork")
 
     def test_editions_share_state_while_forks_are_isolated(self) -> None:
         with TemporaryDirectory() as state_home:
@@ -250,6 +263,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
                 goal_factory=StateDefinitionGoal,
                 vendor="Base Vendor",
                 product="Base Product",
+                short_product_name="Base",
                 version="1.0",
                 state_home_resolver=lambda context: state_home,
             )
@@ -277,6 +291,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
                 goal_factory=object(),  # type: ignore[arg-type]
                 vendor="Engulf Tests",
                 product="Invalid Definition",
+                short_product_name="Invalid",
                 version="0.test",
             )
 
@@ -286,6 +301,7 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
             goal_factory=DefinitionGoal,
             vendor="Base Vendor",
             product="Base Product",
+            short_product_name="Base",
             version="1.0",
         )
         with self.assertRaisesRegex(TypeError, "must be a boolean"):
