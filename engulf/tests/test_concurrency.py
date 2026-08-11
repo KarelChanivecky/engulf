@@ -26,6 +26,7 @@ else:
 from engulf.plugin_api import InvocationContextTable, RuntimePluginAPI
 from engulf.state import InvocationStateManager
 from engulf_api import (
+    ApplicationMetadata,
     Invocation,
     LockTimeoutError,
     PluginPhaseError,
@@ -55,6 +56,13 @@ def _make_runtime(
         context_table=InvocationContextTable(),
         state_manager=manager,
         diagnostic_logger=logging.getLogger(f"tests.{plugin_id}"),
+        application=ApplicationMetadata(
+            application_id=application_id,
+            display_name="engulf-concurrency-tests",
+            vendor="Engulf Tests",
+            product="Concurrency Tests",
+            version="0.test",
+        ),
         elevated=False,
     )
     api.activate("test.preprocess")

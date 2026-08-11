@@ -5,13 +5,19 @@ from collections.abc import Iterable
 from contextlib import AbstractContextManager
 from typing import Literal, TypeVar, overload
 
+from .application import ApplicationMetadata
 from .diagnostics import PluginLogger
 from .goals import AttributedContribution, GoalPhase
 from .state import StateScope, StateStore, WorkspaceState
 
 
 class DiagnosticsAPI(ABC):
-    """Logging capability shared by every managed callback API."""
+    """Application metadata and logging shared by every managed callback API."""
+
+    @property
+    @abstractmethod
+    def application(self) -> ApplicationMetadata:
+        """Return immutable metadata for the active application."""
 
     @property
     @abstractmethod

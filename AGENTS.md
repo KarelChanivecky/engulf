@@ -46,6 +46,9 @@ APPLICATION = ApplicationDefinition(
     application_id="com.example.app",
     display_name="example-app",
     goal_factory=MyGoal,
+    vendor="Example Corp",
+    product="Example App",
+    version="1.0.0",
     plugin_policy=PluginPolicy.declared(),
 )
 ```
@@ -58,11 +61,17 @@ API.
 Treat `application_id` as persistent compatibility and state metadata. Changing it
 changes application entry-point discovery, state location, and lease identity.
 `display_name` controls diagnostics and reserved logging option names.
+Every callback receives immutable `api.application` metadata containing technical
+`application_id` and descriptive `display_name`, `vendor`, `product`, and `version`.
+Plugins may derive presentation or external naming conventions from the descriptive
+fields, but must never use them for compatibility, state, leases, elevation, trust,
+or authorization.
 
 Use `definition.edition()` for a differently branded launcher representing the same
 logical application. Editions retain the application ID and therefore share plugin
 declarations, state, leases, and future app-scoped policy. They may add optional or
-required plugins but do not remove base selections. `PluginPolicy.including()` may
+required plugins and override display/vendor/product/version while inheriting any
+omitted metadata, but do not remove base selections. `PluginPolicy.including()` may
 unblock a base blocklist entry; blocklists are activation defaults, not security
 deny lists.
 

@@ -23,6 +23,9 @@ from engulf_encryption_example_core import ENCRYPTION_APPLICATION
 
 VENDOR_APPLICATION = ENCRYPTION_APPLICATION.edition(
     display_name="vendor-encrypt",
+    vendor="Vendor Corp",
+    product="Vendor Encrypt",
+    version="0.1.0-vendor.1",
     require_plugins={"com.vendor.encryption-policy"},
 )
 

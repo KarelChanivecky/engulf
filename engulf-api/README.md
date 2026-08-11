@@ -67,6 +67,33 @@ rejected even though Python treats them as integers.
 `Application.invoke()` returns the complete result. `Application.run()` returns only
 its exit code.
 
+## Application Metadata
+
+Every registration, lifecycle, goal, and goal-specific phase API exposes the same
+immutable `api.application` value:
+
+```python
+metadata = api.application
+api.logger.info(
+    "%s %s %s",
+    metadata.vendor,
+    metadata.product,
+    metadata.version,
+)
+```
+
+`ApplicationMetadata` contains `application_id`, `display_name`, `vendor`, `product`,
+and `version`. Plugins may use the descriptive fields to derive presentation,
+environment-variable prefixes, and other application-facing conventions. Values
+are nonempty strings without surrounding whitespace or control characters; plugins
+remain responsible for any stricter normalization required by an external format.
+
+Only `application_id` is technical identity. Vendor, product, version, and
+display name do not affect goal compatibility, state paths, lease identity,
+elevation, activation, or trust. The API property is callback-bound, although the
+returned frozen metadata value may be retained. `GoalSetupAPI.application_id` and
+`display_name` remain convenience aliases for the corresponding metadata fields.
+
 ## Plugin Lifecycle
 
 All goal-specific plugin classes derive from `Plugin` and declare:

@@ -7,6 +7,7 @@ from typing import Any, Literal, overload
 
 from engulf_api import (
     AfterGoalAPI,
+    ApplicationMetadata,
     AttributedContribution,
     BeforeGoalAPI,
     GoalAPI,
@@ -47,10 +48,14 @@ class RuntimePluginAPI(BeforeGoalAPI, AfterGoalAPI):
         context_table: InvocationContextTable,
         state_manager: InvocationStateManager,
         diagnostic_logger: logging.Logger,
+        application: ApplicationMetadata,
         elevated: bool,
     ) -> None:
+        if not isinstance(application, ApplicationMetadata):
+            raise TypeError("application must be ApplicationMetadata")
         if type(elevated) is not bool:
             raise TypeError("elevated must be a boolean")
+        self._application = application
         self._elevated = elevated
         self._activation = _ActivationState(participant_id, diagnostic_logger)
         self._locks = _LockCoordinator(self._activation, state_manager)
@@ -88,6 +93,11 @@ class RuntimePluginAPI(BeforeGoalAPI, AfterGoalAPI):
     @property
     def logger(self) -> PluginLogger:
         return self._activation.logger
+
+    @property
+    def application(self) -> ApplicationMetadata:
+        self._activation.require_active("application")
+        return self._application
 
     @property
     def elevated(self) -> bool:

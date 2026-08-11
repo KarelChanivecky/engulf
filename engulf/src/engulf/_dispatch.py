@@ -5,6 +5,7 @@ from dataclasses import replace
 from typing import Any
 
 from engulf_api import (
+    ApplicationMetadata,
     AttributedContribution,
     GoalPhase,
     GoalResult,
@@ -44,17 +45,17 @@ class _RuntimeGoalSetupAPI(GoalSetupAPI):
         self,
         diagnostics: DiagnosticsSession,
         dispatch: _SetupDispatch,
-        application_id: str,
-        display_name: str,
+        application: ApplicationMetadata,
         plugin_ids: tuple[str, ...],
         elevated: bool,
     ) -> None:
+        if not isinstance(application, ApplicationMetadata):
+            raise TypeError("application must be ApplicationMetadata")
         if type(elevated) is not bool:
             raise TypeError("elevated must be a boolean")
         self._diagnostics = diagnostics
         self._dispatch = dispatch
-        self._application_id = application_id
-        self._display_name = display_name
+        self._application = application
         self._plugin_ids = plugin_ids
         self._elevated = elevated
         self._active = True
@@ -70,17 +71,22 @@ class _RuntimeGoalSetupAPI(GoalSetupAPI):
         )
 
     @property
+    def application(self) -> ApplicationMetadata:
+        self._require_active()
+        return self._application
+
+    @property
     def elevated(self) -> bool:
         self._require_active()
         return self._elevated
 
     @property
     def application_id(self) -> str:
-        return self._application_id
+        return self.application.application_id
 
     @property
     def display_name(self) -> str:
-        return self._display_name
+        return self.application.display_name
 
     @property
     def plugin_ids(self) -> tuple[str, ...]:

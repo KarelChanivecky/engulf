@@ -52,7 +52,11 @@ class AuditPlugin(ExecutableWrapperPlugin):
             takes_value=True,
             description="Attach an audit label",
         )
-        api.logger.debug("registered audit completion metadata")
+        api.logger.debug(
+            "registered audit metadata for %s %s",
+            api.application.vendor,
+            api.application.product,
+        )
 
     def register_completions(self, registry, api: RegistrationAPI) -> None:
         registry.candidate("--audit-summary")

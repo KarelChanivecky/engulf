@@ -1,3 +1,4 @@
+from .application import ApplicationMetadata
 from .dependencies import DependencyPosition, PluginDependency
 from .diagnostics import PluginLogger
 from .errors import (
@@ -40,6 +41,7 @@ __all__ = [
     "PLUGIN_API_MAJOR",
     "PLUGIN_API_VERSION",
     "AfterGoalAPI",
+    "ApplicationMetadata",
     "AttributedContribution",
     "BeforeGoalAPI",
     "ContextAccessError",

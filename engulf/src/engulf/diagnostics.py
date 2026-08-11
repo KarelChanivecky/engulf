@@ -12,6 +12,7 @@ from types import MappingProxyType, TracebackType
 from typing import Self, cast
 
 from engulf_api import (
+    ApplicationMetadata,
     PluginLogger,
     PluginPhaseError,
     RegistrationAPI,
@@ -400,12 +401,16 @@ class RuntimeDiagnosticsAPI(RegistrationAPI):
         plugin_id: str,
         logger: logging.Logger,
         *,
+        application: ApplicationMetadata,
         elevated: bool,
     ) -> None:
+        if not isinstance(application, ApplicationMetadata):
+            raise TypeError("application must be ApplicationMetadata")
         if type(elevated) is not bool:
             raise TypeError("elevated must be a boolean")
         self._plugin_id = plugin_id
         self._logger = logger
+        self._application = application
         self._elevated = elevated
         self._phase: str | None = None
         self._activation_id = 0
@@ -440,6 +445,11 @@ class RuntimeDiagnosticsAPI(RegistrationAPI):
             lambda: self._require_activation(activation_id),
             phase,
         )
+
+    @property
+    def application(self) -> ApplicationMetadata:
+        self._require_activation(self._activation_id)
+        return self._application
 
     @property
     def elevated(self) -> bool:

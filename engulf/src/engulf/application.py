@@ -10,6 +10,7 @@ from types import TracebackType
 from typing import Any, Self, cast
 
 from engulf_api import (
+    ApplicationMetadata,
     AttributedContribution,
     Goal,
     GoalContract,
@@ -80,6 +81,9 @@ class Application[ResultT]:
         goal: Goal[ResultT],
         *,
         display_name: str,
+        vendor: str,
+        product: str,
+        version: str,
         plugin_policy: PluginPolicy | None = None,
         required_plugin_ids: Iterable[str] = (),
         plugin_declaration_application_ids: Iterable[str] = (),
@@ -113,6 +117,13 @@ class Application[ResultT]:
 
         self._application_id = normalize_application_id(application_id)
         self._display_name = validate_display_name(display_name)
+        self._application_metadata = ApplicationMetadata(
+            application_id=self._application_id,
+            display_name=self._display_name,
+            vendor=vendor,
+            product=product,
+            version=version,
+        )
         self._goal = goal
         self._contract = contract
         self._plugin_policy = policy
@@ -239,6 +250,22 @@ class Application[ResultT]:
     @property
     def display_name(self) -> str:
         return self._display_name
+
+    @property
+    def application_metadata(self) -> ApplicationMetadata:
+        return self._application_metadata
+
+    @property
+    def vendor(self) -> str:
+        return self._application_metadata.vendor
+
+    @property
+    def product(self) -> str:
+        return self._application_metadata.product
+
+    @property
+    def version(self) -> str:
+        return self._application_metadata.version
 
     @property
     def goal(self) -> Goal[ResultT]:
@@ -415,6 +442,7 @@ class Application[ResultT]:
                 item.plugin_id: RuntimeDiagnosticsAPI(
                     item.plugin_id,
                     diagnostics.plugin_logger(item.plugin_id),
+                    application=self._application_metadata,
                     elevated=self._elevated,
                 )
                 for item in self._preprocess_order
@@ -434,8 +462,7 @@ class Application[ResultT]:
             api = _RuntimeGoalSetupAPI(
                 diagnostics,
                 dispatch,
-                self._application_id,
-                self._display_name,
+                self._application_metadata,
                 tuple(item.plugin_id for item in self._preprocess_order),
                 self._elevated,
             )
@@ -476,6 +503,7 @@ class Application[ResultT]:
                 context_table=context_table,
                 state_manager=state_manager,
                 diagnostic_logger=diagnostics.plugin_logger(item.plugin_id),
+                application=self._application_metadata,
                 elevated=self._elevated,
             )
             for item in self._preprocess_order
@@ -498,6 +526,7 @@ class Application[ResultT]:
             context_table=context_table,
             state_manager=state_manager,
             diagnostic_logger=diagnostics.core,
+            application=self._application_metadata,
             elevated=self._elevated,
             dispatch=dispatch,
         )

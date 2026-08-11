@@ -4,7 +4,7 @@ import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 
-from engulf_api import Goal
+from engulf_api import ApplicationMetadata, Goal
 
 from .application import Application
 from .diagnostics import LoggingConfig, validate_display_name
@@ -25,6 +25,9 @@ class ApplicationDefinition[ResultT]:
     application_id: str
     display_name: str
     goal_factory: GoalFactory[ResultT]
+    vendor: str
+    product: str
+    version: str
     plugin_policy: PluginPolicy = field(default_factory=PluginPolicy.declared)
     required_plugin_ids: frozenset[str] = frozenset()
     logging_config: LoggingConfig = field(default_factory=LoggingConfig)
@@ -54,12 +57,16 @@ class ApplicationDefinition[ResultT]:
             include=self.required_plugin_ids
         ).plugin_ids
         application_id = normalize_application_id(self.application_id)
-        object.__setattr__(self, "application_id", application_id)
-        object.__setattr__(
-            self,
-            "display_name",
-            validate_display_name(self.display_name),
+        display_name = validate_display_name(self.display_name)
+        ApplicationMetadata(
+            application_id=application_id,
+            display_name=display_name,
+            vendor=self.vendor,
+            product=self.product,
+            version=self.version,
         )
+        object.__setattr__(self, "application_id", application_id)
+        object.__setattr__(self, "display_name", display_name)
         object.__setattr__(self, "required_plugin_ids", required_ids)
         object.__setattr__(
             self,
@@ -75,10 +82,23 @@ class ApplicationDefinition[ResultT]:
             ),
         )
 
+    @property
+    def application_metadata(self) -> ApplicationMetadata:
+        return ApplicationMetadata(
+            application_id=self.application_id,
+            display_name=self.display_name,
+            vendor=self.vendor,
+            product=self.product,
+            version=self.version,
+        )
+
     def edition(
         self,
         *,
         display_name: str,
+        vendor: str | None = None,
+        product: str | None = None,
+        version: str | None = None,
         include_plugins: Iterable[str] = (),
         require_plugins: Iterable[str] = (),
     ) -> ApplicationDefinition[ResultT]:
@@ -88,6 +108,9 @@ class ApplicationDefinition[ResultT]:
         return replace(
             self,
             display_name=display_name,
+            vendor=self.vendor if vendor is None else vendor,
+            product=self.product if product is None else product,
+            version=self.version if version is None else version,
             plugin_policy=policy,
             required_plugin_ids=self.required_plugin_ids | required_ids,
         )
@@ -97,6 +120,9 @@ class ApplicationDefinition[ResultT]:
         *,
         application_id: str,
         display_name: str,
+        vendor: str | None = None,
+        product: str | None = None,
+        version: str | None = None,
         include_plugins: Iterable[str] = (),
         require_plugins: Iterable[str] = (),
         inherit_declarations: bool = False,
@@ -113,6 +139,9 @@ class ApplicationDefinition[ResultT]:
             self,
             application_id=application_id,
             display_name=display_name,
+            vendor=self.vendor if vendor is None else vendor,
+            product=self.product if product is None else product,
+            version=self.version if version is None else version,
             plugin_policy=policy,
             required_plugin_ids=self.required_plugin_ids | required_ids,
             plugin_declaration_application_ids=declarations,
@@ -129,6 +158,9 @@ class ApplicationDefinition[ResultT]:
             self.application_id,
             self.goal_factory(),
             display_name=self.display_name,
+            vendor=self.vendor,
+            product=self.product,
+            version=self.version,
             plugin_policy=self.plugin_policy,
             required_plugin_ids=self.required_plugin_ids,
             plugin_declaration_application_ids=(

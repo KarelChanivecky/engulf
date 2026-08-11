@@ -101,6 +101,9 @@ application = Application(
     "engulf-signal-forwarding-tests",
     ExecutableWrapperGoal(os.environ["ENGULF_SIGNAL_BINARY"]),
     display_name="engulf-signal-tests",
+    vendor="Engulf Tests",
+    product="Signal Forwarding Tests",
+    version="0.test",
     plugin_dir=os.environ["ENGULF_SIGNAL_PLUGIN_DIR"],
     discover_installed=False,
 )
@@ -211,6 +214,9 @@ class ExecutableWrapperGoalTestCase(unittest.TestCase):
                 "engulf-lifecycle-tests",
                 ExecutableWrapperGoal(binary or self.binary),
                 display_name="engulf-lifecycle-tests",
+                vendor="Engulf Tests",
+                product="Executable Wrapper Tests",
+                version="0.test",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
             )

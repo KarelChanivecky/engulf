@@ -17,6 +17,9 @@ application = Application(
     application_id="com.example.containerlab",
     goal=ExecutableWrapperGoal("containerlab"),
     display_name="clab",
+    vendor="Example Corp",
+    product="Containerlab Wrapper",
+    version="1.0.0",
     plugin_policy=PluginPolicy.declared(),
 )
 

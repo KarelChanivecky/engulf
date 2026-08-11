@@ -10,6 +10,7 @@ from engulf_api import (
     PLUGIN_API_MAJOR,
     PLUGIN_API_VERSION,
     AfterGoalAPI,
+    ApplicationMetadata,
     AttributedContribution,
     BeforeGoalAPI,
     DependencyPosition,
@@ -52,6 +53,40 @@ class ApiTestCase(unittest.TestCase):
     def test_api_version_matches_contract(self) -> None:
         self.assertEqual(PLUGIN_API_MAJOR, 1)
         self.assertEqual(PLUGIN_API_VERSION, "1.0.0")
+
+    def test_application_metadata_is_immutable_validated_and_keyword_only(self) -> None:
+        metadata = ApplicationMetadata(
+            application_id="com.example.app",
+            display_name="example-app",
+            vendor="Example Corp",
+            product="Example App",
+            version="1.2.3+vendor.1",
+        )
+
+        self.assertEqual(metadata.vendor, "Example Corp")
+        self.assertEqual(metadata.product, "Example App")
+        self.assertEqual(metadata.version, "1.2.3+vendor.1")
+        with self.assertRaises(TypeError):
+            ApplicationMetadata(  # type: ignore[misc]
+                "com.example.app",
+                "example-app",
+                "Example Corp",
+                "Example App",
+                "1.2.3",
+            )
+        for field, value in (
+            ("vendor", ""),
+            ("product", " surrounding "),
+            ("version", "1.0\nforged"),
+        ):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                ApplicationMetadata(
+                    application_id="com.example.app",
+                    display_name="example-app",
+                    vendor="Example Corp" if field != "vendor" else value,
+                    product="Example App" if field != "product" else value,
+                    version="1.0" if field != "version" else value,
+                )
 
     def test_plugin_metadata_defaults_and_priority(self) -> None:
         class EarlierPlugin(ExamplePlugin):
@@ -201,6 +236,7 @@ class ApiTestCase(unittest.TestCase):
                 api_type()
 
         common = {
+            "application",
             "elevated",
             "lease",
             "leases",

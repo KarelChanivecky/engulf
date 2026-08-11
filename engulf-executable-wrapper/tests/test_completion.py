@@ -75,6 +75,9 @@ class CompletionTestCase(unittest.TestCase):
                 "engulf-completion-tests",
                 self.goal,
                 display_name="engulf-completion-tests",
+                vendor="Engulf Tests",
+                product="Completion Tests",
+                version="0.test",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
             )
@@ -223,6 +226,9 @@ class CompletionTestCase(unittest.TestCase):
                 "engulf-completion-tests",
                 ExecutableWrapperGoal("echo"),
                 display_name="engulf-completion-tests",
+                vendor="Engulf Tests",
+                product="Completion Tests",
+                version="0.test",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
             )
@@ -377,6 +383,9 @@ class ShellCompletionIntegrationTestCase(unittest.TestCase):
                         completion_provider=lambda context: ["--base"],
                     ),
                     display_name="engulf-shell-tests",
+                    vendor="Engulf Tests",
+                    product="Shell Completion Tests",
+                    version="0.test",
                     plugin_dir=Path(__file__).with_name("plugins"),
                     discover_installed=False,
                 )

@@ -23,6 +23,9 @@ REPORT_APPLICATION = ApplicationDefinition(
     application_id="com.example.report-cli",
     display_name="report-cli",
     goal_factory=ReportGoal,
+    vendor="Example Corp",
+    product="Report CLI",
+    version="1.4.0",
     plugin_policy=PluginPolicy.declared(
         include={"com.example.shared.audit"},
     ),
@@ -68,6 +71,9 @@ from report_app_core import REPORT_APPLICATION
 
 VENDOR_REPORT = REPORT_APPLICATION.edition(
     display_name="vendor-report",
+    vendor="Vendor Corp",
+    product="Vendor Report",
+    version="1.4.0-vendor.2",
     include_plugins={"com.vendor.optional-export"},
     require_plugins={"com.vendor.policy"},
 )
@@ -78,6 +84,9 @@ workspace state, named lease namespace, and any future application-scoped policy
 Both launchers must therefore remain behaviorally and state-schema compatible.
 Goals supporting editions must derive command-facing names from
 `GoalSetupAPI.display_name` instead of hard-coding the official executable name.
+Every callback receives the edition's immutable metadata through `api.application`,
+so plugins can adapt labels and environment-variable conventions without knowing the
+launcher at build time. Omitted edition metadata fields inherit from the base.
 
 A fork reuses the goal factory and defaults under an independent identity:
 
@@ -85,6 +94,9 @@ A fork reuses the goal factory and defaults under an independent identity:
 INDEPENDENT_REPORT = REPORT_APPLICATION.fork(
     application_id="com.vendor.report",
     display_name="vendor-report",
+    vendor="Vendor Corp",
+    product="Vendor Report",
+    version="2.0.0",
     inherit_declarations=True,
 )
 ```
@@ -105,6 +117,11 @@ so the official launcher does not activate it merely because it is installed.
 into declared and allowlist policies and removes IDs from blocklist exclusions.
 Blocklist exclusions are therefore defaults an edition may override, not a security
 denylist.
+
+Vendor, product, version, and display name are descriptive metadata. They never
+replace `application_id` in discovery, state, lease, compatibility, elevation, or
+trust decisions. Applications expose the same value as `application_metadata` and
+convenience `vendor`, `product`, and `version` properties.
 
 `application.active_plugins` and its `application.plugins` alias return immutable
 `ActivePlugin` descriptors, never live implementation objects. Each descriptor

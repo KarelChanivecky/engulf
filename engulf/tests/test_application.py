@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from engulf_api import (
+    ApplicationMetadata,
     ElevationRequirement,
     Goal,
     GoalAPI,
@@ -118,12 +119,14 @@ class RecordingGoal(Goal[tuple[tuple[str, str], ...]]):
     def setup(self, api: GoalSetupAPI) -> None:
         self.setup_count += 1
         self.setup_elevated = api.elevated
+        self.setup_application = api.application
         self.setup_identity = (api.application_id, api.display_name, api.plugin_ids)
         api.dispatch(REGISTER, None)
 
     def achieve(self, invocation: Invocation, api: GoalAPI):
         self.achieve_count += 1
         self.achieve_elevated = api.elevated
+        self.achieve_application = api.application
         contributions = api.dispatch(CONTRIBUTE, invocation.arguments)
         value = tuple(
             (contribution.plugin_id, contribution.value)
@@ -151,6 +154,9 @@ class ApplicationTestCase(unittest.TestCase):
                 "tests-application",
                 goal,
                 display_name="test-application",
+                vendor="Engulf Tests",
+                product="Application Tests",
+                version="0.test",
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
             )
@@ -194,6 +200,16 @@ class ApplicationTestCase(unittest.TestCase):
             self.plugin_directory.resolve(),
         )
         self.assertIs(application.elevated, goal.setup_elevated)
+        expected_metadata = ApplicationMetadata(
+            application_id="tests-application",
+            display_name="test-application",
+            vendor="Engulf Tests",
+            product="Application Tests",
+            version="0.test",
+        )
+        self.assertEqual(application.application_metadata, expected_metadata)
+        self.assertEqual(goal.setup_application, expected_metadata)
+        self.assertEqual(goal.achieve_application, expected_metadata)
         self.assertEqual(
             goal.setup_identity,
             (
@@ -223,6 +239,7 @@ class ApplicationTestCase(unittest.TestCase):
         self.assertEqual(blocked_calls, [])
 
         observed: list[tuple[str, bool]] = []
+        observed_applications: list[ApplicationMetadata] = []
         retained_apis: list[RegistrationAPI | InvocationAPI] = []
 
         def record(
@@ -230,6 +247,7 @@ class ApplicationTestCase(unittest.TestCase):
         ) -> Callable[[RegistrationAPI | InvocationAPI], None]:
             def inspect(api: RegistrationAPI | InvocationAPI) -> None:
                 observed.append((phase, api.elevated))
+                observed_applications.append(api.application)
                 retained_apis.append(api)
 
             return inspect
@@ -251,9 +269,15 @@ class ApplicationTestCase(unittest.TestCase):
             observed,
             [("registration", False), ("invocation", False)],
         )
+        self.assertEqual(
+            observed_applications,
+            [optional_goal.setup_application, optional_goal.setup_application],
+        )
         for api in retained_apis:
             with self.assertRaises(PluginPhaseError):
                 _ = api.elevated
+            with self.assertRaises(PluginPhaseError):
+                _ = api.application
 
         elevated_goal = RecordingGoal()
         elevated_calls: list[bool] = []
@@ -485,6 +509,9 @@ class ApplicationTestCase(unittest.TestCase):
                 "tests-application",
                 goal,
                 display_name="test-application",
+                vendor="Engulf Tests",
+                product="Application Tests",
+                version="0.test",
                 required_plugin_ids=("tests.application.required",),
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
