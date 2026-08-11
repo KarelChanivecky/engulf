@@ -15,12 +15,29 @@ This workspace contains four independently publishable Python 3.14 distributions
 
 `engulf` is not itself a binary wrapper. Wrapping an executable is one possible
 goal, implemented by `ExecutableWrapperGoal`. A goal can instead implement all of
-its work in Python, as shown by [`examples/encryption-app`](examples/encryption-app).
+its work in Python, as shown by the reusable
+[`examples/encryption-core`](examples/encryption-core) package and its thin
+[`examples/encryption-app`](examples/encryption-app) launcher.
 
 `engulf-api`, `engulf`, and goal API contracts are OS-independent. The core state
 runtime selects a POSIX or Windows security and locking backend. The executable
 wrapper runtime remains Linux-specific because its process-group, signal-forwarding,
 and Bash/Zsh completion behavior is part of that goal.
+
+## Current Execution Boundary
+
+Engulf currently imports and executes every selected plugin in the application
+process with that process's full operating-system authority. `PluginPolicy` is an
+activation policy, `ElevationRequirement` is a compatibility declaration, and
+managed state paths are namespace conveniences; none of them is a trust boundary or
+sandbox. An elevated application therefore elevates every selected plugin.
+
+Applications must select only trusted code when they run elevated. Keep application
+code, its Python environment, and `plugin_dir` outside locations writable by less
+privileged users. A future execution backend may isolate compatible plugins, so the
+public contract exposes immutable plugin metadata and source records and routes
+callbacks through stable phase IDs. No current plugin should infer that isolation is
+already present.
 
 ## Development
 
@@ -31,7 +48,7 @@ remaining commands: `.venv/bin/python` on POSIX or
 ```console
 python -m venv --upgrade-deps .venv
 python -m pip install --group dev
-python -m pip install --no-deps -e ./engulf-api -e ./engulf -e ./engulf-executable-wrapper-api -e ./engulf-executable-wrapper -e ./examples/encryption-app
+python -m pip install --no-deps -e ./engulf-api -e ./engulf -e ./engulf-executable-wrapper-api -e ./engulf-executable-wrapper -e ./examples/encryption-core -e ./examples/encryption-app
 ```
 
 Run every suite from the workspace root:

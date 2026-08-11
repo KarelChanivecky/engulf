@@ -29,6 +29,7 @@ from engulf_api import (
     Plugin,
     PluginDependency,
     PluginLogger,
+    PluginMetadata,
     PluginOrder,
     RegistrationAPI,
     StateCatalogError,
@@ -79,6 +80,39 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(plugin.context_reads, frozenset())
         self.assertEqual(plugin.context_writes, frozenset())
         self.assertEqual(plugin.goal_requirement, REQUIREMENT)
+        self.assertEqual(
+            plugin.metadata,
+            PluginMetadata(
+                plugin_id=plugin.plugin_id,
+                goal_requirement=REQUIREMENT,
+            ),
+        )
+
+    def test_plugin_metadata_is_validated_and_keyword_only(self) -> None:
+        metadata = PluginMetadata(
+            plugin_id="tests.api.metadata",
+            goal_requirement=REQUIREMENT,
+            context_reads=frozenset({"tests.api.context"}),
+        )
+
+        self.assertEqual(metadata.priority, 50)
+        with self.assertRaises(TypeError):
+            PluginMetadata(  # type: ignore[misc]
+                "tests.api.metadata",
+                REQUIREMENT,
+            )
+        with self.assertRaisesRegex(TypeError, "priority"):
+            PluginMetadata(
+                plugin_id="tests.api.metadata",
+                goal_requirement=REQUIREMENT,
+                priority=True,
+            )
+        with self.assertRaisesRegex(ValueError, "context identifier"):
+            PluginMetadata(
+                plugin_id="tests.api.metadata",
+                goal_requirement=REQUIREMENT,
+                context_reads=frozenset({"INVALID"}),
+            )
 
     def test_dependency_defaults_form_middleware_order(self) -> None:
         dependency = PluginDependency("com.example.required")
@@ -130,18 +164,28 @@ class ApiTestCase(unittest.TestCase):
 
     def test_goal_phases_are_typed_attributed_and_two_ordered(self) -> None:
         phase = GoalPhase(
-            "tests.api.phase",
-            PluginOrder.PREPROCESS,
-            lambda plugin, event, api: event,
-            str,
+            phase_id="tests.api.phase",
+            order=PluginOrder.PREPROCESS,
+            local_callback=lambda plugin, event, api: event,
+            contribution_type=str,
         )
-        contribution = AttributedContribution("tests.api.example", "value")
+        contribution = AttributedContribution(
+            plugin_id="tests.api.example",
+            value="value",
+        )
         self.assertIs(phase.order, PluginOrder.PREPROCESS)
+        self.assertTrue(callable(phase.local_callback))
         self.assertEqual(contribution.value, "value")
         self.assertEqual(
             tuple(PluginOrder),
             (PluginOrder.PREPROCESS, PluginOrder.POSTPROCESS),
         )
+        with self.assertRaises(TypeError):
+            GoalPhase(  # type: ignore[misc]
+                "tests.api.positional",
+                PluginOrder.PREPROCESS,
+                lambda plugin, event, api: None,
+            )
 
     def test_lifecycle_apis_expose_only_generic_capabilities(self) -> None:
         for api_type in (

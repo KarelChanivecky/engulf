@@ -121,45 +121,45 @@ def _after_call(
 _REGISTER_ARGUMENTS: GoalPhase[
     ExecutableWrapperPlugin, _SetupEvent, RegistrationAPI, None
 ] = GoalPhase(
-    "org.engulf.executable-wrapper.setup.arguments",
-    PluginOrder.PREPROCESS,
-    _register_arguments,
+    phase_id="org.engulf.executable-wrapper.setup.arguments",
+    order=PluginOrder.PREPROCESS,
+    local_callback=_register_arguments,
 )
 _REGISTER_COMPLETIONS: GoalPhase[
     ExecutableWrapperPlugin, _SetupEvent, RegistrationAPI, None
 ] = GoalPhase(
-    "org.engulf.executable-wrapper.setup.completions",
-    PluginOrder.PREPROCESS,
-    _register_completions,
+    phase_id="org.engulf.executable-wrapper.setup.completions",
+    order=PluginOrder.PREPROCESS,
+    local_callback=_register_completions,
 )
 _COLLECT_HELP: GoalPhase[ExecutableWrapperPlugin, _SetupEvent, RegistrationAPI, str] = (
     GoalPhase(
-        "org.engulf.executable-wrapper.setup.help",
-        PluginOrder.PREPROCESS,
-        _collect_help,
-        str,
+        phase_id="org.engulf.executable-wrapper.setup.help",
+        order=PluginOrder.PREPROCESS,
+        local_callback=_collect_help,
+        contribution_type=str,
     )
 )
 _ANALYZE_CALL: GoalPhase[
     ExecutableWrapperPlugin, BeforeCallEvent, InvocationAPI, CallContribution
 ] = GoalPhase(
-    "org.engulf.executable-wrapper.call.analyze",
-    PluginOrder.PREPROCESS,
-    _analyze_call,
-    CallContribution,
+    phase_id="org.engulf.executable-wrapper.call.analyze",
+    order=PluginOrder.PREPROCESS,
+    local_callback=_analyze_call,
+    contribution_type=CallContribution,
 )
 _PREPARE_CALL: GoalPhase[
     ExecutableWrapperPlugin, PreparedCallEvent, InvocationAPI, None
 ] = GoalPhase(
-    "org.engulf.executable-wrapper.call.prepare",
-    PluginOrder.PREPROCESS,
-    _prepare_call,
+    phase_id="org.engulf.executable-wrapper.call.prepare",
+    order=PluginOrder.PREPROCESS,
+    local_callback=_prepare_call,
 )
 _AFTER_CALL: GoalPhase[ExecutableWrapperPlugin, AfterCallEvent, InvocationAPI, None] = (
     GoalPhase(
-        "org.engulf.executable-wrapper.call.finalize",
-        PluginOrder.POSTPROCESS,
-        _after_call,
+        phase_id="org.engulf.executable-wrapper.call.finalize",
+        order=PluginOrder.POSTPROCESS,
+        local_callback=_after_call,
     )
 )
 

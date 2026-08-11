@@ -20,7 +20,7 @@ from .goals import (
     PluginOrder,
 )
 from .identifiers import validate_global_identifier
-from .plugin import ElevationRequirement, Plugin, plugin_name
+from .plugin import ElevationRequirement, Plugin, PluginMetadata, plugin_name
 from .plugin_api import (
     AfterGoalAPI,
     BeforeGoalAPI,
@@ -61,6 +61,7 @@ __all__ = [
     "Plugin",
     "PluginDependency",
     "PluginLogger",
+    "PluginMetadata",
     "PluginOrder",
     "PluginPhaseError",
     "RegistrationAPI",

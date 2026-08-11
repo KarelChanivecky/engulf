@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, cast
+from types import TracebackType
+from typing import Any, Self, cast
 
 from engulf_api import (
     AttributedContribution,
@@ -44,13 +46,16 @@ from .plugin_api import (
     RuntimeGoalAPI,
     RuntimePluginAPI,
 )
+from .plugin_info import ActivePlugin
 from .plugin_loader import (
     PluginPolicy,
+    PluginRequirementError,
     application_plugin_entry_point_group,
     discover_plugins,
     goal_plugin_entry_point_group,
     load_directory_plugins,
     normalize_application_id,
+    normalize_plugin_declaration_application_ids,
     resolve_discovered_plugin_orders,
     resolve_plugin_directory,
     validate_goal_plugins,
@@ -76,6 +81,8 @@ class Application[ResultT]:
         *,
         display_name: str,
         plugin_policy: PluginPolicy | None = None,
+        required_plugin_ids: Iterable[str] = (),
+        plugin_declaration_application_ids: Iterable[str] = (),
         logging_config: LoggingConfig | None = None,
         plugin_dir: str | os.PathLike[str] | None = None,
         discover_installed: bool = True,
@@ -101,17 +108,29 @@ class Application[ResultT]:
         policy = PluginPolicy.declared() if plugin_policy is None else plugin_policy
         if not isinstance(policy, PluginPolicy):
             raise TypeError("plugin_policy must be a PluginPolicy")
+        required_ids = PluginPolicy.declared(include=required_plugin_ids).plugin_ids
+        policy = policy.including(required_ids)
 
         self._application_id = normalize_application_id(application_id)
         self._display_name = validate_display_name(display_name)
         self._goal = goal
         self._contract = contract
         self._plugin_policy = policy
+        self._required_plugin_ids = required_ids
+        self._plugin_declaration_application_ids = (
+            normalize_plugin_declaration_application_ids(
+                self._application_id,
+                plugin_declaration_application_ids,
+            )
+        )
         self._plugin_directory = (
             None if plugin_dir is None else resolve_plugin_directory(plugin_dir)
         )
         self._workspace_root_resolver = workspace_root_resolver
         self._state_home_resolver = state_home_resolver
+        self._lifecycle_lock = threading.Lock()
+        self._invocation_active = False
+        self._closed = False
 
         directory_plugins = (
             ()
@@ -128,26 +147,69 @@ class Application[ResultT]:
             contract,
             policy,
             directory_plugins=directory_plugins,
+            plugin_directory=self._plugin_directory,
+            plugin_declaration_application_ids=(
+                self._plugin_declaration_application_ids
+            ),
             discover_installed=discover_installed,
         )
-        self._missing_policy_ids = discovery.missing_policy_ids
 
-        orders = resolve_discovered_plugin_orders(discovery)
-        for item in orders.preprocess:
-            if item.goal_requirement != contract.requirement:
+        try:
+            active_ids = frozenset(item.plugin_id for item in discovery.loaded_plugins)
+            missing_required_ids = tuple(sorted(required_ids - active_ids))
+            if missing_required_ids:
+                raise PluginRequirementError(
+                    "required plugins are unavailable: "
+                    + ", ".join(repr(plugin_id) for plugin_id in missing_required_ids)
+                )
+            orders = resolve_discovered_plugin_orders(discovery)
+        except BaseException as resolution_error:
+            try:
+                discovery.close()
+            except Exception as cleanup_error:  # noqa: BLE001 - preserve both failures.
+                raise BaseExceptionGroup(
+                    "plugin resolution and endpoint cleanup failed",
+                    (resolution_error, cleanup_error),
+                ) from None
+            raise
+        self._missing_policy_ids = tuple(
+            plugin_id
+            for plugin_id in discovery.missing_policy_ids
+            if plugin_id not in required_ids
+        )
+        self._preprocess_order = orders.preprocess
+        self._postprocess_order = orders.postprocess
+        try:
+            self._initialize_loaded_plugins(logging_config)
+        except BaseException as initialization_error:
+            try:
+                self.close()
+            except Exception as cleanup_error:  # noqa: BLE001 - preserve both failures.
+                raise BaseExceptionGroup(
+                    "application construction and endpoint cleanup failed",
+                    (initialization_error, cleanup_error),
+                ) from None
+            raise
+
+    def _initialize_loaded_plugins(
+        self,
+        logging_config: LoggingConfig | None,
+    ) -> None:
+        for item in self._preprocess_order:
+            if item.goal_requirement != self._contract.requirement:
                 raise TypeError(
                     f"plugin {item.plugin_id!r} has incompatible goal requirement"
                 )
         self._elevated = is_process_elevated()
         validate_plugin_elevation(
-            orders.preprocess,
+            self._preprocess_order,
             elevated=self._elevated,
         )
-        self._preprocess_order = orders.preprocess
-        self._postprocess_order = orders.postprocess
-        self._plugins = tuple(item.plugin for item in self._preprocess_order)
+        self._active_plugins = tuple(
+            item.active_plugin for item in self._preprocess_order
+        )
         self._postprocess_plugins = tuple(
-            item.plugin for item in self._postprocess_order
+            item.active_plugin for item in self._postprocess_order
         )
         self._hook_runner = _HookRunner(
             self._preprocess_order,
@@ -191,6 +253,14 @@ class Application[ResultT]:
         return self._plugin_policy
 
     @property
+    def required_plugin_ids(self) -> frozenset[str]:
+        return self._required_plugin_ids
+
+    @property
+    def plugin_declaration_application_ids(self) -> tuple[str, ...]:
+        return self._plugin_declaration_application_ids
+
+    @property
     def elevated(self) -> bool:
         return self._elevated
 
@@ -206,11 +276,24 @@ class Application[ResultT]:
         return application_plugin_entry_point_group(self._application_id)
 
     @property
-    def plugins(self) -> tuple[Plugin, ...]:
-        return self._plugins
+    def application_plugin_entry_point_groups(self) -> tuple[str, ...]:
+        return tuple(
+            application_plugin_entry_point_group(application_id)
+            for application_id in self._plugin_declaration_application_ids
+        )
 
     @property
-    def postprocess_plugins(self) -> tuple[Plugin, ...]:
+    def active_plugins(self) -> tuple[ActivePlugin, ...]:
+        """Return implementation-free plugin descriptors in preprocessing order."""
+        return self._active_plugins
+
+    @property
+    def plugins(self) -> tuple[ActivePlugin, ...]:
+        """Alias for :attr:`active_plugins`."""
+        return self._active_plugins
+
+    @property
+    def postprocess_plugins(self) -> tuple[ActivePlugin, ...]:
         return self._postprocess_plugins
 
     @property
@@ -221,11 +304,58 @@ class Application[ResultT]:
     def missing_policy_ids(self) -> tuple[str, ...]:
         return self._missing_policy_ids
 
+    @property
+    def closed(self) -> bool:
+        with self._lifecycle_lock:
+            return self._closed
+
+    def __enter__(self) -> Self:
+        self._require_open()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc_value, traceback
+        self.close()
+
+    def close(self) -> None:
+        """Release execution endpoints; repeated calls have no effect."""
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            if self._invocation_active:
+                raise RuntimeError("cannot close application during an invocation")
+            self._closed = True
+        failures: list[Exception] = []
+        for item in self._preprocess_order:
+            try:
+                item.endpoint.close()
+            except Exception as error:  # noqa: BLE001 - endpoints are extensible.
+                failures.append(error)
+        if failures:
+            raise ExceptionGroup("plugin endpoint cleanup failed", failures)
+
     def invoke(
         self,
         argv: Sequence[str] | None = None,
         *,
         log_overrides: LogLevelOverrides | None = None,
+    ) -> GoalResult[ResultT]:
+        self._begin_invocation()
+        try:
+            return self._invoke_once(argv, log_overrides=log_overrides)
+        finally:
+            self._end_invocation()
+
+    def _invoke_once(
+        self,
+        argv: Sequence[str] | None,
+        *,
+        log_overrides: LogLevelOverrides | None,
     ) -> GoalResult[ResultT]:
         programmatic_overrides = self._normalize_overrides(log_overrides)
         if programmatic_overrides is None:
@@ -460,3 +590,22 @@ class Application[ResultT]:
                 )
             return None
         return result
+
+    def _require_open(self) -> None:
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("application is closed")
+
+    def _begin_invocation(self) -> None:
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("application is closed")
+            if self._invocation_active:
+                raise RuntimeError("application invocation is already active")
+            self._invocation_active = True
+
+    def _end_invocation(self) -> None:
+        with self._lifecycle_lock:
+            if not self._invocation_active:
+                raise RuntimeError("application invocation is not active")
+            self._invocation_active = False

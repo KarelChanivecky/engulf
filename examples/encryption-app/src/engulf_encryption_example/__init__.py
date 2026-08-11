@@ -1,18 +1,11 @@
 from __future__ import annotations
 
-from engulf import Application
-
-from .goal import EncryptionGoal
-
-application = Application(
-    "org.engulf.example.encryption",
-    EncryptionGoal(),
-    display_name="engulf-encrypt",
-)
+from engulf_encryption_example_core import ENCRYPTION_APPLICATION
 
 
 def main() -> int:
-    return application.run()
+    with ENCRYPTION_APPLICATION.create() as application:
+        return application.run()
 
 
-__all__ = ["application", "main"]
+__all__ = ["ENCRYPTION_APPLICATION", "main"]

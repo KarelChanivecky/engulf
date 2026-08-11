@@ -1,10 +1,9 @@
 # Encryption Goal Example
 
-This example demonstrates an Engulf application whose goal performs its work in
-Python rather than wrapping an executable. It uses `cryptography.fernet` for
-authenticated encryption and exposes three modes within one encryption goal. It is
-also the cross-platform reference application for running Engulf without the
-Linux-specific executable-wrapper goal.
+This thin launcher depends on `engulf-encryption-example-core`, whose goal performs
+its work in Python rather than wrapping an executable. The core package exports a
+side-effect-free `ENCRYPTION_APPLICATION` definition; this package only creates a
+fresh application and provides the official console command.
 
 ```console
 engulf-encrypt generate-key secret.key
@@ -13,6 +12,25 @@ engulf-encrypt decrypt --key secret.key ciphertext.bin restored.txt
 ```
 
 `EncryptionGoal` declares its own goal ID, API major, result type, and
-`EncryptionPlugin` adapter type. It still receives Engulf diagnostics, context,
-state, transactions, leases, and plugin phase dispatch through `GoalAPI`; it simply
-does not need all of those facilities for this small example.
+`EncryptionPlugin` adapter type. It obtains its command-facing name from
+`GoalSetupAPI.display_name`, so a vendor can derive an edition under another command
+name without changing the goal.
+
+A vendor launcher can depend on the core package and derive an edition:
+
+```python
+from engulf_encryption_example_core import ENCRYPTION_APPLICATION
+
+VENDOR_APPLICATION = ENCRYPTION_APPLICATION.edition(
+    display_name="vendor-encrypt",
+    require_plugins={"com.vendor.encryption-policy"},
+)
+
+
+def main() -> int:
+    with VENDOR_APPLICATION.create() as application:
+        return application.run()
+```
+
+The edition retains the encryption application's identity, declarations, state, and
+leases. A vendor needing an independent product uses `fork()` instead.

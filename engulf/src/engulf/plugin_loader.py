@@ -22,8 +22,17 @@ from engulf_api import (
     GoalRequirement,
     Plugin,
     PluginDependency,
+    PluginMetadata,
     plugin_name,
     validate_global_identifier,
+)
+
+from ._plugin_execution import _InProcessPluginEndpoint, _PluginEndpoint
+from .plugin_info import (
+    ActivePlugin,
+    PluginSource,
+    PluginSourceKind,
+    _normalize_distribution_name,
 )
 
 
@@ -39,19 +48,50 @@ class PluginElevationError(PluginLoadError):
     """Raised when an active plugin requires unavailable elevation."""
 
 
+class PluginRequirementError(PluginLoadError):
+    """Raised when an application-required plugin is unavailable."""
+
+
 @dataclass(frozen=True, slots=True)
 class LoadedPlugin:
     """Validated, immutable metadata for one discovered plugin."""
 
-    plugin: Plugin
-    plugin_id: str
-    goal_requirement: GoalRequirement
-    priority: int
-    elevation_requirement: ElevationRequirement
-    dependencies: tuple[PluginDependency, ...]
-    context_reads: frozenset[str]
-    context_writes: frozenset[str]
+    metadata: PluginMetadata
+    source: PluginSource
+    endpoint: _PluginEndpoint
     discovery_index: int
+
+    @property
+    def active_plugin(self) -> ActivePlugin:
+        return ActivePlugin(metadata=self.metadata, source=self.source)
+
+    @property
+    def plugin_id(self) -> str:
+        return self.metadata.plugin_id
+
+    @property
+    def goal_requirement(self) -> GoalRequirement:
+        return self.metadata.goal_requirement
+
+    @property
+    def priority(self) -> int:
+        return self.metadata.priority
+
+    @property
+    def elevation_requirement(self) -> ElevationRequirement:
+        return self.metadata.elevation_requirement
+
+    @property
+    def dependencies(self) -> tuple[PluginDependency, ...]:
+        return self.metadata.plugin_dependencies
+
+    @property
+    def context_reads(self) -> frozenset[str]:
+        return self.metadata.context_reads
+
+    @property
+    def context_writes(self) -> frozenset[str]:
+        return self.metadata.context_writes
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,12 +153,24 @@ class PluginPolicy:
     def allow_all_except(cls, plugin_ids: Iterable[str]) -> PluginPolicy:
         return cls(PluginPolicyMode.BLOCKLIST, _policy_ids(plugin_ids))
 
+    def including(self, plugin_ids: Iterable[str]) -> PluginPolicy:
+        """Return a policy that additionally selects the supplied plugin IDs."""
+        additions = _policy_ids(plugin_ids)
+        if self.mode is PluginPolicyMode.BLOCKLIST:
+            selected_ids = self.plugin_ids - additions
+        else:
+            selected_ids = self.plugin_ids | additions
+        return replace(self, plugin_ids=selected_ids)
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PluginDiscovery:
-    plugins: tuple[Plugin, ...]
     missing_policy_ids: tuple[str, ...]
     loaded_plugins: tuple[LoadedPlugin, ...]
+
+    def close(self) -> None:
+        """Release every materialized endpoint after abandoned discovery."""
+        _close_plugin_endpoints(self.loaded_plugins)
 
 
 _namespace_counter = itertools.count()
@@ -136,6 +188,33 @@ def normalize_application_id(application_id: str) -> str:
             "and must begin and end with a letter or number"
         )
     return re.sub(r"[-_.]+", "-", application_id).lower()
+
+
+def normalize_plugin_declaration_application_ids(
+    application_id: str,
+    inherited_application_ids: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Return the current and inherited declaration identities in stable order."""
+    if isinstance(inherited_application_ids, str):
+        raise TypeError(
+            "plugin declaration application IDs must be an iterable, not a string"
+        )
+    try:
+        inherited = tuple(inherited_application_ids)
+    except TypeError as error:
+        raise TypeError(
+            "plugin declaration application IDs must be iterable strings"
+        ) from error
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in (application_id, *inherited):
+        normalized = normalize_application_id(value)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return tuple(result)
 
 
 def application_plugin_entry_point_group(application_id: str) -> str:
@@ -217,6 +296,8 @@ def load_installed_plugins(
     application_id: str,
     contract: GoalContract,
     policy: PluginPolicy,
+    *,
+    plugin_declaration_application_ids: Iterable[str] = (),
 ) -> PluginDiscovery:
     """Select installed plugins without any directory-plugin candidates."""
     return discover_plugins(
@@ -224,6 +305,7 @@ def load_installed_plugins(
         contract,
         policy,
         directory_plugins=(),
+        plugin_declaration_application_ids=plugin_declaration_application_ids,
         discover_installed=True,
     )
 
@@ -234,6 +316,8 @@ def discover_plugins(
     policy: PluginPolicy,
     *,
     directory_plugins: Iterable[Plugin],
+    plugin_directory: Path | None = None,
+    plugin_declaration_application_ids: Iterable[str] = (),
     discover_installed: bool,
 ) -> PluginDiscovery:
     """Select compatible directory and installed plugins for one application."""
@@ -243,8 +327,20 @@ def discover_plugins(
         raise TypeError("policy must be a PluginPolicy")
     if not isinstance(discover_installed, bool):
         raise TypeError("discover_installed must be a boolean")
+    if plugin_directory is not None and (
+        not isinstance(plugin_directory, Path) or not plugin_directory.is_absolute()
+    ):
+        raise ValueError("plugin_directory must be an absolute pathlib.Path or None")
+    declaration_application_ids = normalize_plugin_declaration_application_ids(
+        application_id,
+        plugin_declaration_application_ids,
+    )
 
     local_plugins = tuple(directory_plugins)
+    sources: dict[int, PluginSource] = {
+        id(plugin): _directory_plugin_source(plugin, plugin_directory)
+        for plugin in local_plugins
+    }
     local_by_id: dict[str, list[Plugin]] = {}
     for plugin in local_plugins:
         _validate_goal_compatibility(
@@ -262,27 +358,32 @@ def discover_plugins(
         local_by_id.setdefault(plugin_id, []).append(plugin)
 
     catalog_entries: dict[str, EntryPoint] = {}
-    application_entries: dict[str, EntryPoint] = {}
+    application_entry_catalogs: list[dict[str, EntryPoint]] = []
     if discover_installed:
         catalog_group = goal_plugin_entry_point_group(
             contract.goal_id,
             contract.api_major,
         )
-        application_group = application_plugin_entry_point_group(application_id)
         catalog_entries = _entry_point_catalog(catalog_group)
-        application_entries = _entry_point_catalog(application_group)
+        application_entry_catalogs = [
+            _entry_point_catalog(
+                application_plugin_entry_point_group(declaration_application_id)
+            )
+            for declaration_application_id in declaration_application_ids
+        ]
 
     declared_ids: set[str] = set()
-    for plugin_id, declaration in application_entries.items():
-        catalog = catalog_entries.get(plugin_id)
-        if catalog is None:
-            continue
-        if not _same_entry_point_source(declaration, catalog):
-            raise PluginLoadError(
-                f"application declaration for plugin {plugin_id!r} does not match "
-                "its goal catalog entry"
-            )
-        declared_ids.add(plugin_id)
+    for application_entries in application_entry_catalogs:
+        for plugin_id, declaration in application_entries.items():
+            catalog = catalog_entries.get(plugin_id)
+            if catalog is None:
+                continue
+            if not _same_entry_point_source(declaration, catalog):
+                raise PluginLoadError(
+                    f"application declaration for plugin {plugin_id!r} does not "
+                    "match its goal catalog entry"
+                )
+            declared_ids.add(plugin_id)
 
     if policy.mode is PluginPolicyMode.DECLARED:
         selected_local_ids = set(local_by_id)
@@ -297,25 +398,38 @@ def discover_plugins(
     loaded_catalog: dict[str, Plugin] = {}
     metadata: dict[int, LoadedPlugin] = {}
     if policy.include_dependencies:
-        _expand_allowlist_dependencies(
-            contract,
-            local_by_id,
-            catalog_entries,
-            selected_local_ids,
-            selected_catalog_ids,
-            loaded_catalog,
-            metadata,
-        )
+        try:
+            _expand_allowlist_dependencies(
+                contract,
+                local_by_id,
+                catalog_entries,
+                selected_local_ids,
+                selected_catalog_ids,
+                loaded_catalog,
+                metadata,
+                sources,
+            )
+        except BaseException as discovery_error:
+            _cleanup_discovery_failure(discovery_error, metadata.values())
+            raise
 
     installed_plugins: list[Plugin] = []
     selected_entries = (
-        catalog_entries[plugin_id] for plugin_id in selected_catalog_ids
+        catalog_entries[plugin_id]
+        for plugin_id in selected_catalog_ids
+        if plugin_id in catalog_entries
     )
-    for entry_point in sorted(selected_entries, key=_entry_point_sort_key):
-        installed_plugin = loaded_catalog.get(entry_point.name)
-        if installed_plugin is None:
-            installed_plugin = _load_catalog_plugin(entry_point, contract)
-        installed_plugins.append(installed_plugin)
+    try:
+        for entry_point in sorted(selected_entries, key=_entry_point_sort_key):
+            installed_plugin = loaded_catalog.get(entry_point.name)
+            if installed_plugin is None:
+                source = _installed_plugin_source(entry_point)
+                installed_plugin = _load_catalog_plugin(entry_point, contract)
+                sources[id(installed_plugin)] = source
+            installed_plugins.append(installed_plugin)
+    except BaseException as discovery_error:
+        _cleanup_discovery_failure(discovery_error, metadata.values())
+        raise
 
     selected_local = tuple(
         plugin for plugin in local_plugins if plugin.plugin_id in selected_local_ids
@@ -328,14 +442,28 @@ def discover_plugins(
     )
     selected_plugins = selected_local + tuple(installed_plugins)
     loaded_plugins: list[LoadedPlugin] = []
-    for discovery_index, plugin in enumerate(selected_plugins):
-        snapshot = metadata.get(id(plugin))
-        if snapshot is None:
-            snapshot = _snapshot_plugin(plugin, discovery_index)
-        elif snapshot.discovery_index != discovery_index:
-            snapshot = replace(snapshot, discovery_index=discovery_index)
-        loaded_plugins.append(snapshot)
-    return PluginDiscovery(selected_plugins, missing, tuple(loaded_plugins))
+    try:
+        for discovery_index, plugin in enumerate(selected_plugins):
+            snapshot = metadata.get(id(plugin))
+            if snapshot is None:
+                snapshot = _snapshot_plugin(
+                    plugin,
+                    discovery_index,
+                    source=sources[id(plugin)],
+                )
+            elif snapshot.discovery_index != discovery_index:
+                snapshot = replace(snapshot, discovery_index=discovery_index)
+            loaded_plugins.append(snapshot)
+    except BaseException as discovery_error:
+        _cleanup_discovery_failure(
+            discovery_error,
+            (*metadata.values(), *loaded_plugins),
+        )
+        raise
+    return PluginDiscovery(
+        missing_policy_ids=missing,
+        loaded_plugins=tuple(loaded_plugins),
+    )
 
 
 def _expand_allowlist_dependencies(
@@ -346,6 +474,7 @@ def _expand_allowlist_dependencies(
     selected_catalog_ids: set[str],
     loaded_catalog: dict[str, Plugin],
     metadata: dict[int, LoadedPlugin],
+    sources: dict[int, PluginSource],
 ) -> None:
     pending = list(selected_local_ids | selected_catalog_ids)
     heapq.heapify(pending)
@@ -363,8 +492,10 @@ def _expand_allowlist_dependencies(
             selected_catalog_ids.add(plugin_id)
             installed = loaded_catalog.get(plugin_id)
             if installed is None:
+                source = _installed_plugin_source(entry_point)
                 installed = _load_catalog_plugin(entry_point, contract)
                 loaded_catalog[plugin_id] = installed
+                sources[id(installed)] = source
             plugins.append(installed)
         if plugin_id in local_by_id:
             selected_local_ids.add(plugin_id)
@@ -372,7 +503,7 @@ def _expand_allowlist_dependencies(
         for plugin in plugins:
             snapshot = metadata.get(id(plugin))
             if snapshot is None:
-                snapshot = _snapshot_plugin(plugin, 0)
+                snapshot = _snapshot_plugin(plugin, 0, source=sources[id(plugin)])
                 metadata[id(plugin)] = snapshot
             for dependency in snapshot.dependencies:
                 dependency_id = dependency.plugin_id
@@ -403,7 +534,11 @@ def _load_catalog_plugin(
 def resolve_plugin_orders(plugins: Iterable[Plugin]) -> PluginOrders:
     """Validate plugin metadata and resolve deterministic per-phase orders."""
     loaded = tuple(
-        _snapshot_plugin(plugin, discovery_index)
+        _snapshot_plugin(
+            plugin,
+            discovery_index,
+            source=_directory_plugin_source(plugin, None),
+        )
         for discovery_index, plugin in enumerate(plugins)
     )
     return _resolve_loaded_plugin_orders(loaded)
@@ -414,6 +549,35 @@ def resolve_discovered_plugin_orders(discovery: PluginDiscovery) -> PluginOrders
     if not isinstance(discovery, PluginDiscovery):
         raise TypeError("discovery must be a PluginDiscovery")
     return _resolve_loaded_plugin_orders(discovery.loaded_plugins)
+
+
+def _close_plugin_endpoints(plugins: Iterable[LoadedPlugin]) -> None:
+    failures: list[Exception] = []
+    closed: set[int] = set()
+    for item in plugins:
+        identity = id(item.endpoint)
+        if identity in closed:
+            continue
+        closed.add(identity)
+        try:
+            item.endpoint.close()
+        except Exception as error:  # noqa: BLE001 - endpoints are extensible.
+            failures.append(error)
+    if failures:
+        raise ExceptionGroup("plugin endpoint cleanup failed", failures)
+
+
+def _cleanup_discovery_failure(
+    discovery_error: BaseException,
+    plugins: Iterable[LoadedPlugin],
+) -> None:
+    try:
+        _close_plugin_endpoints(plugins)
+    except Exception as cleanup_error:  # noqa: BLE001 - preserve both failures.
+        raise BaseExceptionGroup(
+            "plugin discovery and endpoint cleanup failed",
+            (discovery_error, cleanup_error),
+        ) from None
 
 
 def validate_plugin_elevation(
@@ -445,7 +609,8 @@ def _resolve_loaded_plugin_orders(
         if existing is not None:
             raise PluginDependencyError(
                 f"duplicate plugin_id {item.plugin_id!r}: "
-                f"{plugin_name(existing.plugin)} and {plugin_name(item.plugin)}"
+                f"{existing.endpoint.implementation_name} and "
+                f"{item.endpoint.implementation_name}"
             )
         by_id[item.plugin_id] = item
 
@@ -525,85 +690,29 @@ def _materialize_plugin(exported: object, source: str) -> Plugin:
     return plugin
 
 
-def _snapshot_plugin(plugin: Plugin, discovery_index: int) -> LoadedPlugin:
+def _snapshot_plugin(
+    plugin: Plugin,
+    discovery_index: int,
+    *,
+    source: PluginSource,
+) -> LoadedPlugin:
     name = plugin_name(plugin)
     try:
-        plugin_id = plugin.plugin_id
-        goal_requirement = plugin.goal_requirement
-        priority = plugin.priority
-        elevation_requirement = plugin.elevation_requirement
-        dependencies = plugin.plugin_dependencies
-        context_reads = plugin.context_reads
-        context_writes = plugin.context_writes
+        metadata = plugin.metadata
     except Exception as error:
         raise PluginDependencyError(
-            f"could not read metadata for plugin {name}"
+            f"invalid metadata for plugin {name}: {error}"
         ) from error
-
-    try:
-        validated_plugin_id = validate_global_identifier(
-            plugin_id, label=f"plugin_id for plugin {name}"
-        )
-    except (TypeError, ValueError) as error:
-        raise PluginDependencyError(str(error)) from error
-    if not isinstance(goal_requirement, GoalRequirement):
+    if not isinstance(metadata, PluginMetadata):
         raise PluginDependencyError(
-            f"goal_requirement for plugin {validated_plugin_id!r} must be a "
-            "GoalRequirement"
+            f"metadata for plugin {name} must be a PluginMetadata"
         )
-    if type(priority) is not int:
-        raise PluginDependencyError(
-            f"priority for plugin {validated_plugin_id!r} must be an integer"
-        )
-    if not isinstance(elevation_requirement, ElevationRequirement):
-        raise PluginDependencyError(
-            f"elevation_requirement for plugin {validated_plugin_id!r} must be an "
-            "ElevationRequirement"
-        )
-    if type(dependencies) is not tuple:
-        raise PluginDependencyError(
-            f"plugin_dependencies for plugin {validated_plugin_id!r} must be a tuple"
-        )
-    if any(not isinstance(item, PluginDependency) for item in dependencies):
-        raise PluginDependencyError(
-            f"plugin_dependencies for plugin {validated_plugin_id!r} must contain "
-            "only PluginDependency values"
-        )
-
-    validated_reads = _validate_context_ids(
-        context_reads, plugin_id=validated_plugin_id, field="context_reads"
-    )
-    validated_writes = _validate_context_ids(
-        context_writes, plugin_id=validated_plugin_id, field="context_writes"
-    )
     return LoadedPlugin(
-        plugin=plugin,
-        plugin_id=validated_plugin_id,
-        goal_requirement=goal_requirement,
-        priority=priority,
-        elevation_requirement=elevation_requirement,
-        dependencies=dependencies,
-        context_reads=validated_reads,
-        context_writes=validated_writes,
+        metadata=metadata,
+        source=source,
+        endpoint=_InProcessPluginEndpoint(plugin),
         discovery_index=discovery_index,
     )
-
-
-def _validate_context_ids(
-    values: object, *, plugin_id: str, field: str
-) -> frozenset[str]:
-    if type(values) is not frozenset:
-        raise PluginDependencyError(
-            f"{field} for plugin {plugin_id!r} must be a frozenset"
-        )
-    for context_id in values:
-        try:
-            validate_global_identifier(
-                context_id, label=f"context identifier in {field} for {plugin_id!r}"
-            )
-        except (TypeError, ValueError) as error:
-            raise PluginDependencyError(str(error)) from error
-    return values
 
 
 def _topological_order(
@@ -698,6 +807,38 @@ def _entry_point_sort_key(entry_point: EntryPoint) -> tuple[str, str, str]:
     return distribution_name.casefold(), entry_point.name, entry_point.value
 
 
+def _directory_plugin_source(
+    plugin: Plugin,
+    directory: Path | None,
+) -> PluginSource:
+    if directory is None:
+        return PluginSource(
+            kind=PluginSourceKind.DIRECT,
+            target=plugin_name(plugin),
+        )
+    return PluginSource(
+        kind=PluginSourceKind.DIRECTORY,
+        target=plugin_name(plugin),
+        directory=directory,
+    )
+
+
+def _installed_plugin_source(
+    entry_point: EntryPoint,
+) -> PluginSource:
+    distribution = entry_point.dist
+    return PluginSource(
+        kind=PluginSourceKind.INSTALLED,
+        target=entry_point.value,
+        distribution_name=(None if distribution is None else distribution.name or None),
+        distribution_version=(
+            None if distribution is None else distribution.version or None
+        ),
+        entry_point_group=entry_point.group,
+        entry_point_value=entry_point.value,
+    )
+
+
 def _entry_point_identifier(entry_point: EntryPoint) -> str:
     distribution_name = _entry_point_distribution_name(entry_point)
     version = entry_point.dist.version if entry_point.dist is not None else "unknown"
@@ -750,10 +891,6 @@ def _same_entry_point_source(left: EntryPoint, right: EntryPoint) -> bool:
         == _normalize_distribution_name(right_distribution.name or "")
         and left_distribution.version == right_distribution.version
     )
-
-
-def _normalize_distribution_name(name: str) -> str:
-    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def _validate_goal_compatibility(

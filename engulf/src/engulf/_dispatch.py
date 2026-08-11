@@ -126,10 +126,10 @@ class _HookRunner:
             api = apis[item.plugin_id]
             api.activate("before_goal")
             try:
-                candidate = item.plugin.before_goal(invocation, api)
+                candidate = item.endpoint.before_goal(invocation, api)
                 if candidate is not None:
                     result = _require_result(candidate, "before_goal")
-            except Exception as error:  # noqa: BLE001 - plugins are a trust boundary.
+            except Exception as error:  # noqa: BLE001 - isolate extension failures.
                 _report_plugin_error(
                     diagnostics,
                     _PluginCallbackError(item.plugin_id, "before_goal", error),
@@ -163,9 +163,9 @@ class _HookRunner:
             api = apis[item.plugin_id]
             api.activate("after_goal")
             try:
-                candidate = item.plugin.after_goal(invocation, current, api)
+                candidate = item.endpoint.after_goal(invocation, current, api)
                 current = _require_result(candidate, "after_goal")
-            except Exception as error:  # noqa: BLE001 - plugins are a trust boundary.
+            except Exception as error:  # noqa: BLE001 - isolate extension failures.
                 _report_plugin_error(
                     diagnostics,
                     _PluginCallbackError(item.plugin_id, "after_goal", error),
@@ -199,7 +199,7 @@ class _PhaseDispatcher:
             api = apis[item.plugin_id]
             api.activate(phase.phase_id)
             try:
-                value = phase.callback(item.plugin, event, api)
+                value = item.endpoint.dispatch_phase(phase, event, api)
                 _append_contribution(phase, item, value, contributions)
             except Exception as error:
                 callback_error = _PluginCallbackError(
@@ -224,7 +224,7 @@ class _PhaseDispatcher:
             api = apis[item.plugin_id]
             api.activate(phase.phase_id)
             try:
-                value = phase.callback(item.plugin, event, api)
+                value = item.endpoint.dispatch_phase(phase, event, api)
                 _append_contribution(phase, item, value, contributions)
             except Exception as error:
                 raise _PluginCallbackError(
@@ -260,7 +260,7 @@ def _append_contribution(
             f"plugin {item.plugin_id} returned {type(value).__name__} from "
             f"{phase.phase_id}; expected {phase.contribution_type.__name__}"
         )
-    contributions.append(AttributedContribution(item.plugin_id, value))
+    contributions.append(AttributedContribution(plugin_id=item.plugin_id, value=value))
 
 
 def _require_result(value: object, phase: str) -> GoalResult[Any]:

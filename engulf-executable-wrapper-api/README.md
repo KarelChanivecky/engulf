@@ -24,6 +24,8 @@ class NetworkPlugin(ExecutableWrapperPlugin):
 Use `OPTIONAL` when the plugin has a complete unprivileged path, and inspect
 `api.elevated` inside registration or invocation callbacks. Engulf validates
 `REQUIRED` before registration but does not run `sudo` or request elevation itself.
+This declaration is not authorization: the current runtime executes every selected
+wrapper plugin in-process, so every plugin has the wrapper application's authority.
 
 ## Complete Plugin Example
 
@@ -220,3 +222,8 @@ type and declares that goal's requirement. Do not use wildcard goal compatibilit
 initialized loggers. Argument declarations affect wrapper completion only; they do
 not parse, validate, consume, or automatically remove runtime arguments. Runtime
 argument behavior comes exclusively from returned `CallContribution` values.
+
+These registration APIs intentionally accept mutable registries and Python
+completion callables, so they are local-execution contracts. A future isolated
+execution mode would need a separate declarative registration representation; do
+not serialize or persist registry/provider objects yourself.

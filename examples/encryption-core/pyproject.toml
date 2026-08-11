@@ -3,9 +3,9 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "engulf-encryption-example"
+name = "engulf-encryption-example-core"
 version = "0.1.0"
-description = "Official launcher for the reusable Engulf encryption example"
+description = "Reusable encryption goal and application definition for Engulf"
 readme = "README.md"
 requires-python = ">=3.14"
 classifiers = [
@@ -17,14 +17,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "engulf-encryption-example-core>=0.1,<1",
+    "cryptography>=45",
+    "engulf>=0.1,<1",
 ]
 
-[project.scripts]
-engulf-encrypt = "engulf_encryption_example:main"
-
 [tool.hatch.build.targets.wheel]
-packages = ["src/engulf_encryption_example"]
+packages = ["src/engulf_encryption_example_core"]
 
 [tool.hatch.build.targets.sdist]
 include = [

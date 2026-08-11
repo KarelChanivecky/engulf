@@ -19,6 +19,7 @@ mypy_path = [
     "engulf/src",
     "engulf-executable-wrapper-api/src",
     "engulf-executable-wrapper/src",
+    "examples/encryption-core/src",
     "examples/encryption-app/src",
 ]
 files = [
@@ -26,5 +27,6 @@ files = [
     "engulf/src/engulf",
     "engulf-executable-wrapper-api/src/engulf_executable_wrapper_api",
     "engulf-executable-wrapper/src/engulf_executable_wrapper",
+    "examples/encryption-core/src/engulf_encryption_example_core",
     "examples/encryption-app/src/engulf_encryption_example",
 ]

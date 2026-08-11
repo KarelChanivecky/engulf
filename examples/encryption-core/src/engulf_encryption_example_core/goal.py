@@ -11,6 +11,7 @@ from engulf_api import (
     GoalContract,
     GoalRequirement,
     GoalResult,
+    GoalSetupAPI,
     Invocation,
     Plugin,
 )
@@ -34,17 +35,24 @@ class EncryptionGoal(Goal[Path]):
 
     _contract = GoalContract(ENCRYPTION_REQUIREMENT, EncryptionPlugin)
 
+    def __init__(self) -> None:
+        self._display_name: str | None = None
+
     @property
     def contract(self) -> GoalContract:
         return self._contract
+
+    def setup(self, api: GoalSetupAPI) -> None:
+        self._display_name = api.display_name
 
     def achieve(
         self,
         invocation: Invocation,
         api: GoalAPI,
     ) -> GoalResult[Path]:
+        assert self._display_name is not None
         try:
-            arguments = _parser().parse_args(invocation.arguments)
+            arguments = _parser(self._display_name).parse_args(invocation.arguments)
         except ValueError as error:
             api.logger.error("invalid arguments: %s", error)
             return GoalResult.rejected(2, error=str(error))
@@ -72,8 +80,8 @@ class EncryptionGoal(Goal[Path]):
         return GoalResult.completed(output)
 
 
-def _parser() -> _Parser:
-    parser = _Parser(prog="engulf-encrypt")
+def _parser(display_name: str) -> _Parser:
+    parser = _Parser(prog=display_name)
     commands = parser.add_subparsers(dest="command", required=True)
 
     generate = commands.add_parser("generate-key")

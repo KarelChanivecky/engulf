@@ -29,6 +29,12 @@ The executable may be an explicit text path or a command resolved through `PATH`
 All invocation arguments pass through unchanged unless plugin contributions remove,
 add, or preempt them.
 
+When an application is elevated, all selected plugins and the wrapped child run
+with that authority. Use only trusted plugin packages and prefer an explicit,
+administrator-controlled executable path; do not rely on a `PATH` containing
+locations writable by less-privileged users. Engulf currently provides no plugin
+sandbox or trust grant mechanism.
+
 `Application.invoke()` returns `GoalResult[CallOutcome]`. `Application.run()` returns
 the executable, preemption, spawn-failure, or framework exit code.
 

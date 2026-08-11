@@ -40,19 +40,43 @@ major.
 Every application owns exactly one goal:
 
 ```python
-from engulf import Application, PluginPolicy
+from engulf import ApplicationDefinition, PluginPolicy
 
-application = Application(
+APPLICATION = ApplicationDefinition(
     application_id="com.example.app",
-    goal=MyGoal(),
     display_name="example-app",
+    goal_factory=MyGoal,
     plugin_policy=PluginPolicy.declared(),
 )
 ```
 
+Export definitions from side-effect-free core modules. Console launchers create and
+close a fresh `Application`; importing an app core must not discover plugins or run
+goal setup. Use direct `Application` construction only as the lower-level runtime
+API.
+
 Treat `application_id` as persistent compatibility and state metadata. Changing it
 changes application entry-point discovery, state location, and lease identity.
 `display_name` controls diagnostics and reserved logging option names.
+
+Use `definition.edition()` for a differently branded launcher representing the same
+logical application. Editions retain the application ID and therefore share plugin
+declarations, state, leases, and future app-scoped policy. They may add optional or
+required plugins but do not remove base selections. `PluginPolicy.including()` may
+unblock a base blocklist entry; blocklists are activation defaults, not security
+deny lists.
+
+Use `definition.fork()` for an independent product. A fork gets a new application
+ID, state tree, and lease namespace. Application declaration inheritance is off by
+default and must be requested explicitly with `inherit_declarations=True`; inherited
+declarations affect selection only and never grant trust. Goals intended for
+editions obtain command-facing names from `GoalSetupAPI.display_name`.
+
+Package reusable app behavior as a script-free core wheel. Official and vendor
+launcher wheels depend on it and expose separate console scripts. Vendor-only plugin
+wheels publish the goal catalog entry and are explicitly included by the vendor
+edition; they should not declare the shared application ID unless the official
+launcher should also activate them.
 
 Select installed plugins deliberately:
 
@@ -66,11 +90,21 @@ Select installed plugins deliberately:
 
 Explicit IDs are optional when absent. Dependencies reached from an active plugin
 are never optional, including when implicit dependency activation is enabled.
+Use `required_plugin_ids` or `require_plugins` when an application cannot operate
+without a selected plugin; missing required IDs fail construction before goal setup.
 Do not use application policy to bypass goal ID, goal API major, or plugin runtime
 type checks.
 
 Use `plugin_dir` only for application-owned or development plugins. Installed wheels
 must use entry points.
+
+Close long-lived applications during shutdown or use `Application` as a context
+manager. `Application.active_plugins` and `Application.plugins` expose immutable
+`ActivePlugin` descriptors; application code must not reach into live plugin
+instances. Treat `PluginSource` as observed provenance and `PluginMetadata` as a
+plugin declaration. Do not conflate either with a trust decision. One application
+supports repeated but not overlapping invocations, and it cannot close while an
+invocation is active.
 
 ## Developing A Goal
 
@@ -88,6 +122,14 @@ phase selects one shared `PluginOrder`: preprocessing or postprocessing. Return
 immutable contributions and let the goal merge them only after dispatch completes.
 Plugins must not observe other plugins' contributions during their callback.
 
+Construct phases with keyword arguments. `phase_id` is the stable dispatch and
+future transport identity; `local_callback` is only the in-process adapter. Keep
+that adapter module-level and limited to forwarding into the goal-specific plugin
+contract. Do not place goal logic or captured invocation state in it. Prefer frozen,
+explicitly typed events and contributions so a later goal-owned codec can transport
+them without changing the phase contract. Mutable registries and arbitrary callables
+are inherently local-only unless the goal later defines a separate remote form.
+
 The goal receives managed diagnostics, context, state, transactions, leases, and
 workspaces under a reserved goal namespace. Do not bypass these facilities with
 ad-hoc global storage or lock files.
@@ -103,6 +145,11 @@ lowercase, dot-qualified `plugin_id`. Base priority is 50. Declare privilege use
 module import time. Required elevation fails application construction before setup,
 while optional plugins must branch on callback-bound `api.elevated` and provide a
 coherent unprivileged path.
+
+The inherited `Plugin.metadata` property creates the immutable metadata snapshot.
+Keep declarations side-effect free and do not override `metadata` to inspect the
+machine, application, or invocation. Runtime compatibility may eventually obtain
+the same value outside the application process.
 
 Installed metadata requires a goal catalog entry whose name equals `plugin_id`:
 
@@ -130,6 +177,12 @@ mechanism replaces the other.
 Use callback `api.logger`; do not attach handlers or change logger levels. Registration
 logging is available after activation because unselected catalog modules are never
 imported. Retained loggers and APIs must fail outside their callback.
+
+Current plugins execute in-process with the application's full OS authority.
+`PluginPolicy` selects code and `ElevationRequirement` reports compatibility; neither
+establishes trust or isolation. Never describe plugin state directories as an OS
+sandbox. Elevated applications must activate only trusted packages from trusted,
+non-user-writable Python and plugin locations.
 
 ## Executable-Wrapper Plugins
 
@@ -167,7 +220,7 @@ State invariants:
 
 - filename APIs accept one path component and preserve link/reparse, owner-private,
   and atomic-write protections;
-- `directory` is the sandboxed filesystem view for trees such as cloned repositories;
+- `directory` is the API-namespaced filesystem view for trees such as cloned repositories;
 - reads use shared store locks; directory/path/write/delete operations use exclusive
   locks;
 - atomic writes do not make read-modify-write atomic;
@@ -201,6 +254,13 @@ resources, goal execution, and cleanup. Hook traversal and goal-phase dispatch b
 in `engulf._dispatch`. Keep `RuntimePluginAPI` as the public runtime facade;
 activation, context access, state handles, and lock coordination belong to the
 collaborators in `engulf._capabilities`.
+
+All plugin calls in dispatch must go through the internal execution endpoint. Do not
+restore direct `LoadedPlugin` implementation access in `_dispatch`, and do not expose
+live implementations through public application inspection. Endpoint cleanup must
+remain idempotent and be attempted on application close and construction failure.
+Future trust or process-isolation work belongs behind this seam and must not change
+the meaning of existing activation policy.
 
 Before completion, run:
 

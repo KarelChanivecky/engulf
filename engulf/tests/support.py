@@ -57,19 +57,19 @@ def _collect_help(
 
 
 _REGISTER_ARGUMENTS = GoalPhase(
-    "tests.engulf.setup.arguments",
-    PluginOrder.PREPROCESS,
-    _register_arguments,
+    phase_id="tests.engulf.setup.arguments",
+    order=PluginOrder.PREPROCESS,
+    local_callback=_register_arguments,
 )
 _REGISTER_COMPLETIONS = GoalPhase(
-    "tests.engulf.setup.completions",
-    PluginOrder.PREPROCESS,
-    _register_completions,
+    phase_id="tests.engulf.setup.completions",
+    order=PluginOrder.PREPROCESS,
+    local_callback=_register_completions,
 )
 _COLLECT_HELP = GoalPhase(
-    "tests.engulf.setup.help",
-    PluginOrder.PREPROCESS,
-    _collect_help,
+    phase_id="tests.engulf.setup.help",
+    order=PluginOrder.PREPROCESS,
+    local_callback=_collect_help,
 )
 
 

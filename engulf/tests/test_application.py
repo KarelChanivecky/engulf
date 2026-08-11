@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import tempfile
+import threading
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -26,7 +27,14 @@ from engulf_api import (
     RegistrationAPI,
 )
 
-from engulf import FRAMEWORK_ERROR_EXIT, Application, PluginElevationError
+from engulf import (
+    FRAMEWORK_ERROR_EXIT,
+    ActivePlugin,
+    Application,
+    PluginElevationError,
+    PluginRequirementError,
+    PluginSourceKind,
+)
 
 REQUIREMENT = GoalRequirement("tests.application.goal", 1)
 
@@ -84,15 +92,15 @@ def _register(
 
 
 CONTRIBUTE = GoalPhase(
-    "tests.application.contribute",
-    PluginOrder.PREPROCESS,
-    _contribute,
-    str,
+    phase_id="tests.application.contribute",
+    order=PluginOrder.PREPROCESS,
+    local_callback=_contribute,
+    contribution_type=str,
 )
 REGISTER = GoalPhase(
-    "tests.application.register",
-    PluginOrder.PREPROCESS,
-    _register,
+    phase_id="tests.application.register",
+    order=PluginOrder.PREPROCESS,
+    local_callback=_register,
 )
 
 
@@ -172,6 +180,19 @@ class ApplicationTestCase(unittest.TestCase):
         )
         self.assertEqual(goal.setup_count, 1)
         self.assertEqual(goal.achieve_count, 1)
+        self.assertTrue(
+            all(isinstance(item, ActivePlugin) for item in application.plugins)
+        )
+        self.assertIsNot(application.plugins[0], first)
+        self.assertEqual(application.plugins, application.active_plugins)
+        self.assertIs(
+            application.plugins[0].source.kind,
+            PluginSourceKind.DIRECTORY,
+        )
+        self.assertEqual(
+            application.plugins[0].source.directory,
+            self.plugin_directory.resolve(),
+        )
         self.assertIs(application.elevated, goal.setup_elevated)
         self.assertEqual(
             goal.setup_identity,
@@ -372,6 +393,139 @@ class ApplicationTestCase(unittest.TestCase):
         self.assertIs(result.status, GoalResultStatus.FRAMEWORK_FAILED)
         self.assertEqual(result.exit_code, FRAMEWORK_ERROR_EXIT)
         self.assertEqual(calls, ["failing.after"])
+
+    def test_plugin_descriptors_are_snapshotted_and_application_is_closeable(
+        self,
+    ) -> None:
+        goal = RecordingGoal()
+        plugin = ApplicationPlugin(
+            "tests.application.descriptor",
+            priority=75,
+        )
+        application = self.make_application(goal, plugin)
+        descriptor = application.active_plugins[0]
+
+        plugin.priority = 1
+
+        self.assertEqual(descriptor.priority, 75)
+        self.assertFalse(application.closed)
+        self.assertIs(application.__enter__(), application)
+        with patch(
+            "engulf._plugin_execution._InProcessPluginEndpoint.close",
+            autospec=True,
+        ) as close:
+            application.__exit__(None, None, None)
+            application.close()
+            close.assert_called_once()
+        self.assertTrue(application.closed)
+        with self.assertRaisesRegex(RuntimeError, "application is closed"):
+            application.invoke(())
+
+    def test_setup_failure_closes_all_created_execution_endpoints(self) -> None:
+        plugin = ApplicationPlugin(
+            "tests.application.setup_failure",
+            registration=lambda api: (_ for _ in ()).throw(
+                RuntimeError("setup failed")
+            ),
+        )
+
+        with (
+            patch(
+                "engulf._plugin_execution._InProcessPluginEndpoint.close",
+                autospec=True,
+            ) as close,
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaisesRegex(RuntimeError, "setup failed"),
+        ):
+            self.make_application(RecordingGoal(), plugin)
+
+        close.assert_called_once()
+
+    def test_resolution_failure_closes_all_discovered_execution_endpoints(
+        self,
+    ) -> None:
+        from engulf_api import PluginDependency
+
+        first = ApplicationPlugin("tests.application.resolution_first")
+        second = ApplicationPlugin("tests.application.resolution_second")
+        second.plugin_dependencies = (
+            PluginDependency("tests.application.resolution_missing"),
+        )
+
+        with (
+            patch(
+                "engulf._plugin_execution._InProcessPluginEndpoint.close",
+                autospec=True,
+            ) as close,
+            self.assertRaisesRegex(RuntimeError, "requires missing plugin"),
+        ):
+            self.make_application(RecordingGoal(), first, second)
+
+        self.assertEqual(close.call_count, 2)
+
+    def test_missing_required_plugin_closes_endpoints_before_setup(self) -> None:
+        goal = RecordingGoal()
+        available = ApplicationPlugin("tests.application.available")
+
+        with (
+            patch(
+                "engulf._plugin_execution._InProcessPluginEndpoint.close",
+                autospec=True,
+            ) as close,
+            patch(
+                "engulf.application.load_directory_plugins",
+                return_value=(available,),
+            ),
+            self.assertRaisesRegex(
+                PluginRequirementError,
+                "tests.application.required",
+            ),
+        ):
+            Application(
+                "tests-application",
+                goal,
+                display_name="test-application",
+                required_plugin_ids=("tests.application.required",),
+                plugin_dir=self.plugin_directory,
+                discover_installed=False,
+            )
+
+        close.assert_called_once()
+        self.assertEqual(goal.setup_count, 0)
+
+    def test_overlapping_invocation_and_close_are_rejected(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+        results: list[int] = []
+
+        def wait_for_release(invocation, api) -> None:
+            del invocation, api
+            started.set()
+            if not release.wait(5):
+                raise RuntimeError("test invocation was not released")
+
+        application = self.make_application(
+            RecordingGoal(),
+            ApplicationPlugin(
+                "tests.application.concurrency",
+                before=wait_for_release,
+            ),
+        )
+        thread = threading.Thread(target=lambda: results.append(application.run(())))
+        thread.start()
+        try:
+            self.assertTrue(started.wait(2))
+            with self.assertRaisesRegex(RuntimeError, "already active"):
+                application.invoke(())
+            with self.assertRaisesRegex(RuntimeError, "during an invocation"):
+                application.close()
+        finally:
+            release.set()
+            thread.join(5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results, [0])
+        application.close()
 
 
 if __name__ == "__main__":

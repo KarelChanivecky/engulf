@@ -367,8 +367,9 @@ class ExecutableWrapperGoalTestCase(unittest.TestCase):
         result = self.run_application(engulf, [])
 
         self.assertEqual(result, 0)
+        names_by_id = {plugin.plugin_id: plugin.name for plugin in plugins}
         self.assertEqual(
-            [plugin.name for plugin in engulf.plugins],
+            [names_by_id[plugin.plugin_id] for plugin in engulf.plugins],
             ["high", "equal-first", "equal-second", "low"],
         )
         self.assertEqual(

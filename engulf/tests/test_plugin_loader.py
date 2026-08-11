@@ -27,6 +27,8 @@ from engulf import (
     PluginLoadError,
     PluginPolicy,
     PluginPolicyMode,
+    PluginRequirementError,
+    PluginSourceKind,
     application_plugin_entry_point_group,
     goal_plugin_entry_point_group,
 )
@@ -113,6 +115,8 @@ class PluginLoaderTestCase(unittest.TestCase):
         entries: dict[str, tuple[EntryPoint, ...]] | None = None,
         plugin_dir: Path | None = None,
         discover_installed: bool = True,
+        required_plugin_ids: tuple[str, ...] = (),
+        plugin_declaration_application_ids: tuple[str, ...] = (),
     ) -> Application:
         mapping = {} if entries is None else entries
 
@@ -128,6 +132,8 @@ class PluginLoaderTestCase(unittest.TestCase):
                 LoaderGoal(),
                 display_name="loader-app",
                 plugin_policy=policy,
+                required_plugin_ids=required_plugin_ids,
+                plugin_declaration_application_ids=(plugin_declaration_application_ids),
                 plugin_dir=plugin_dir,
                 discover_installed=discover_installed,
             )
@@ -253,6 +259,17 @@ class PluginLoaderTestCase(unittest.TestCase):
             [plugin.plugin_id for plugin in application.plugins],
             ["tests.loader.alpha", "tests.loader.beta"],
         )
+        alpha_source = application.plugins[0].source
+        self.assertIs(alpha_source.kind, PluginSourceKind.INSTALLED)
+        self.assertEqual(
+            alpha_source.entry_point_group,
+            goal_plugin_entry_point_group(REQUIREMENT.goal_id, REQUIREMENT.api_major),
+        )
+        self.assertEqual(
+            alpha_source.entry_point_value,
+            "engulf_loader_installed_plugins:alpha",
+        )
+        self.assertEqual(alpha_source.target, alpha_source.entry_point_value)
 
     def test_one_plugin_can_declare_multiple_applications(self) -> None:
         catalog = (self.catalog_entry("tests.loader.alpha", "alpha"),)
@@ -277,6 +294,42 @@ class PluginLoaderTestCase(unittest.TestCase):
                     [plugin.plugin_id for plugin in application.plugins],
                     ["tests.loader.alpha"],
                 )
+
+    def test_declared_policy_can_inherit_application_declarations(self) -> None:
+        base_id = "tests-base-app"
+        fork_id = "tests-fork-app"
+        alpha = self.catalog_entry("tests.loader.alpha", "alpha")
+        entries = self.entries_for(fork_id, catalog=(alpha,))
+        entries[application_plugin_entry_point_group(base_id)] = (
+            self.application_entry(base_id, "tests.loader.alpha", "alpha"),
+        )
+
+        isolated = self.make_application(
+            application_id=fork_id,
+            entries=entries,
+        )
+        inherited = self.make_application(
+            application_id=fork_id,
+            entries=entries,
+            plugin_declaration_application_ids=(base_id, base_id),
+        )
+
+        self.assertEqual(isolated.plugins, ())
+        self.assertEqual(
+            [plugin.plugin_id for plugin in inherited.plugins],
+            ["tests.loader.alpha"],
+        )
+        self.assertEqual(
+            inherited.plugin_declaration_application_ids,
+            (fork_id, base_id),
+        )
+        self.assertEqual(
+            inherited.application_plugin_entry_point_groups,
+            (
+                application_plugin_entry_point_group(fork_id),
+                application_plugin_entry_point_group(base_id),
+            ),
+        )
 
     def test_allowlist_and_blocklist_override_plugin_declarations(self) -> None:
         app_id = "tests-policy-app"
@@ -401,6 +454,29 @@ class PluginLoaderTestCase(unittest.TestCase):
                 include_dependencies=True,
             )
 
+    def test_policy_including_only_expands_the_selected_set(self) -> None:
+        declared = PluginPolicy.declared(include={"tests.loader.alpha"}).including(
+            {"tests.loader.beta"}
+        )
+        allowlist = PluginPolicy.allow_only(
+            {"tests.loader.alpha"},
+            include_dependencies=True,
+        ).including({"tests.loader.beta"})
+        blocklist = PluginPolicy.allow_all_except(
+            {"tests.loader.alpha", "tests.loader.beta"}
+        ).including({"tests.loader.beta"})
+
+        self.assertEqual(
+            declared.plugin_ids,
+            frozenset({"tests.loader.alpha", "tests.loader.beta"}),
+        )
+        self.assertEqual(
+            allowlist.plugin_ids,
+            frozenset({"tests.loader.alpha", "tests.loader.beta"}),
+        )
+        self.assertTrue(allowlist.include_dependencies)
+        self.assertEqual(blocklist.plugin_ids, frozenset({"tests.loader.alpha"}))
+
     def test_missing_explicit_ids_are_optional(self) -> None:
         application = self.make_application(
             policy=PluginPolicy.allow_only({"tests.loader.missing"}),
@@ -411,6 +487,35 @@ class PluginLoaderTestCase(unittest.TestCase):
             application.missing_policy_ids,
             ("tests.loader.missing",),
         )
+
+    def test_required_ids_are_selected_and_missing_ids_fail(self) -> None:
+        app_id = "tests-required-app"
+        alpha = self.catalog_entry("tests.loader.alpha", "alpha")
+        selected = self.make_application(
+            application_id=app_id,
+            entries=self.entries_for(app_id, catalog=(alpha,)),
+            required_plugin_ids=("tests.loader.alpha",),
+        )
+
+        self.assertEqual(
+            [plugin.plugin_id for plugin in selected.plugins],
+            ["tests.loader.alpha"],
+        )
+        self.assertEqual(
+            selected.required_plugin_ids,
+            frozenset({"tests.loader.alpha"}),
+        )
+        self.assertEqual(selected.missing_policy_ids, ())
+
+        with self.assertRaisesRegex(
+            PluginRequirementError,
+            "required plugins are unavailable.*tests.loader.missing",
+        ):
+            self.make_application(
+                application_id=app_id,
+                entries=self.entries_for(app_id, catalog=()),
+                required_plugin_ids=("tests.loader.missing",),
+            )
 
     def test_unselected_catalog_entry_is_not_imported(self) -> None:
         marker = self.directory / "imported"

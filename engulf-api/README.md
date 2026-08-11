@@ -85,6 +85,12 @@ class ExamplePlugin(Plugin):
     context_writes = frozenset()
 ```
 
+The inherited `metadata` property returns these declarations as one immutable,
+keyword-only `PluginMetadata` value. Engulf snapshots it during discovery. Declare
+metadata without import-time probes or side effects, and do not mutate it after
+application construction. Runtime implementations may obtain equivalent metadata
+without retaining a live plugin object in the application process.
+
 `elevation_requirement` has three exact values:
 
 - `NONE` (the default): the plugin does not claim elevated behavior.
@@ -96,6 +102,9 @@ Engulf detects root effective UID on POSIX and token elevation on Windows. It do
 not invoke `sudo`, display a UAC prompt, or restart the process. Elevation is plugin
 runtime metadata, so a selected installed plugin is imported before the declaration
 can be validated; plugin modules must remain free of import-time side effects.
+`ElevationRequirement` does not authorize code or isolate it. In the current
+runtime, every selected plugin executes in the application process with the same
+authority as the application.
 
 The optional universal outer hooks are:
 
@@ -134,10 +143,10 @@ def inspect(plugin, event, api: InvocationAPI) -> Finding | None:
 
 
 INSPECT = GoalPhase(
-    "com.example.report.inspect",
-    PluginOrder.PREPROCESS,
-    inspect,
-    Finding,
+    phase_id="com.example.report.inspect",
+    order=PluginOrder.PREPROCESS,
+    local_callback=inspect,
+    contribution_type=Finding,
 )
 
 findings = api.dispatch(INSPECT, event)
@@ -150,6 +159,17 @@ immutable; the runtime validates the declared contribution type.
 
 Only two dependency orders exist: `PREPROCESS` and `POSTPROCESS`. Each goal phase
 selects one. Setup phases normally use preprocessing order.
+
+`phase_id` is the stable routing identity and must remain unique within the goal
+contract. `local_callback` is the in-process adapter for that phase, not its
+identity. Keep the adapter module-level, deterministic, and limited to forwarding to
+the goal-specific plugin method; do not capture invocation state in a closure.
+
+Phase events and contributions should be immutable, explicitly typed values rather
+than open object graphs, mutable registries, or application implementation objects.
+That discipline permits a future execution backend to add goal-owned transport
+codecs without replacing `GoalPhase`. It does not mean current values are serialized
+or that arbitrary existing phases can automatically run out of process.
 
 ## Dependencies And Priority
 

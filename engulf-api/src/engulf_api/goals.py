@@ -160,28 +160,28 @@ class PluginOrder(StrEnum):
     POSTPROCESS = "postprocess"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class GoalPhase[PluginT, EventT, PhaseAPIT, ContributionT]:
-    """Typed callback declaration dispatched by a goal through the runtime."""
+    """Typed phase declaration dispatched through a plugin execution endpoint."""
 
     phase_id: str
     order: PluginOrder
-    callback: Callable[[PluginT, EventT, PhaseAPIT], ContributionT | None]
+    local_callback: Callable[[PluginT, EventT, PhaseAPIT], ContributionT | None]
     contribution_type: type[ContributionT] | None = None
 
     def __post_init__(self) -> None:
         validate_global_identifier(self.phase_id, label="phase_id")
         if not isinstance(self.order, PluginOrder):
             raise TypeError("order must be a PluginOrder")
-        if not callable(self.callback):
-            raise TypeError("callback must be callable")
+        if not callable(self.local_callback):
+            raise TypeError("local_callback must be callable")
         if self.contribution_type is not None and not isinstance(
             self.contribution_type, type
         ):
             raise TypeError("contribution_type must be a type or None")
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AttributedContribution[ContributionT]:
     """One immutable goal-phase contribution and its stable plugin identity."""
 

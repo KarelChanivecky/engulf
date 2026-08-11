@@ -16,13 +16,13 @@ packages.
 ## Constructing An Application
 
 ```python
-from engulf import Application, PluginPolicy
+from engulf import ApplicationDefinition, PluginPolicy
 from my_report_goal import ReportGoal
 
-application = Application(
+REPORT_APPLICATION = ApplicationDefinition(
     application_id="com.example.report-cli",
-    goal=ReportGoal(),
     display_name="report-cli",
+    goal_factory=ReportGoal,
     plugin_policy=PluginPolicy.declared(
         include={"com.example.shared.audit"},
     ),
@@ -30,15 +30,115 @@ application = Application(
 
 
 def main() -> int:
-    return application.run()
+    with REPORT_APPLICATION.create() as application:
+        return application.run()
 ```
+
+`ApplicationDefinition` is immutable and side-effect free. Importing it does not
+instantiate the goal, discover plugins, or run setup. Every `create()` call invokes
+`goal_factory` and returns a fresh managed `Application`. Applications that do not
+need reuse may still construct `Application` directly as the lower-level API.
 
 `application_id` is normalized to lowercase distribution form. Keep it stable: it
 participates in plugin discovery, state paths, and named lease identity.
 
-The `Goal` instance belongs to one application. `Goal.setup()` runs once after
-plugin discovery. Every `invoke()` creates a fresh `Invocation`, context table,
-state manager, diagnostics session, and lifecycle capability set.
+Each created `Goal` instance belongs to one application. `Goal.setup()` runs once
+after plugin discovery. Every `invoke()` creates a fresh `Invocation`, context
+table, state manager, diagnostics session, and lifecycle capability set.
+
+`Application.close()` is idempotent and releases plugin execution endpoints.
+`invoke()` and `run()` reject use after close. Long-lived applications may invoke
+repeatedly and close during shutdown, but overlapping invocations on one application
+are rejected because goal and plugin endpoints are application-owned. Closing during
+an active invocation is also rejected. Scoped applications can use a context manager:
+
+```python
+with REPORT_APPLICATION.create() as application:
+    result = application.invoke(arguments)
+```
+
+### Editions And Forks
+
+An edition is another launcher for the same logical application. It changes the
+command-facing name and adds optional or required plugins while preserving the base
+application ID:
+
+```python
+from report_app_core import REPORT_APPLICATION
+
+VENDOR_REPORT = REPORT_APPLICATION.edition(
+    display_name="vendor-report",
+    include_plugins={"com.vendor.optional-export"},
+    require_plugins={"com.vendor.policy"},
+)
+```
+
+The edition shares the base application's plugin declaration group, user and
+workspace state, named lease namespace, and any future application-scoped policy.
+Both launchers must therefore remain behaviorally and state-schema compatible.
+Goals supporting editions must derive command-facing names from
+`GoalSetupAPI.display_name` instead of hard-coding the official executable name.
+
+A fork reuses the goal factory and defaults under an independent identity:
+
+```python
+INDEPENDENT_REPORT = REPORT_APPLICATION.fork(
+    application_id="com.vendor.report",
+    display_name="vendor-report",
+    inherit_declarations=True,
+)
+```
+
+Fork state and leases are isolated. `inherit_declarations=True` explicitly adds the
+base and ancestor application groups to declared-mode discovery; it does not share
+state or grant trust. Without that flag, only the fork's own application group is
+read. Allowlist and blocklist policies continue to ignore application declarations.
+
+For packaging, put the goal and definition in a script-free core wheel. The
+official and vendor launcher wheels depend on that core and define their own console
+scripts. This avoids installing the official command as a side effect of installing
+the vendor edition. A vendor-only plugin should publish its goal-catalog entry but
+not declare the shared application ID; the vendor definition includes it explicitly,
+so the official launcher does not activate it merely because it is installed.
+
+`PluginPolicy.including()` expands a policy without changing its mode. It unions IDs
+into declared and allowlist policies and removes IDs from blocklist exclusions.
+Blocklist exclusions are therefore defaults an edition may override, not a security
+denylist.
+
+`application.active_plugins` and its `application.plugins` alias return immutable
+`ActivePlugin` descriptors, never live implementation objects. Each descriptor
+contains plugin-declared `PluginMetadata` and runtime-captured `PluginSource` data.
+Installed sources retain distribution name/version and exact entry-point group and
+target when available; directory sources retain their canonical directory. This
+separation lets later execution policies inspect provenance without changing goal
+or plugin metadata. A source record does not attest package integrity, publisher
+identity, secure installation, or trust.
+
+## Execution And Trust
+
+The current endpoint implementation is in-process. Every selected plugin module,
+factory, setup callback, lifecycle hook, and goal phase executes with the
+application's operating-system authority. Activation policy is not trust policy,
+`ElevationRequirement` is not authorization, and plugin state namespaces do not
+prevent same-user filesystem access outside the API.
+
+Do not install or activate untrusted plugins in an elevated application. The Python
+environment, application package, and application-owned plugin directory must not be
+writable by a less-privileged user. Strong privilege separation should keep the
+general Python application unprivileged and expose narrowly validated privileged
+operations through a separate broker.
+
+Dispatch already goes through an internal execution endpoint and uses stable goal
+phase IDs. This is a migration seam, not a sandbox: no remote endpoint, trust grant,
+or privilege-dropping worker is currently implemented.
+
+Any future execution policy remains separate from `PluginPolicy`. Existing phases
+without a goal-defined transport form remain explicitly local-only; they are not
+silently serialized. A hardened application may later reject such plugins, while
+legacy applications can retain in-process behavior. Plugins may declare execution
+compatibility in a future contract, but only the application can authorize an
+execution mode.
 
 ## Invocation Lifecycle
 
@@ -61,8 +161,10 @@ Use `application.invoke(args)` when the typed `GoalResult` matters. Use
 
 ## Installed Plugin Catalogs
 
-Installed discovery reads entry-point metadata before importing plugin modules. A
-plugin package can publish two kinds of declaration.
+Installed discovery reads entry-point identity and distribution metadata before
+importing plugin modules. Plugin-declared ordering, context, dependency, and
+elevation metadata is snapshotted as `PluginMetadata` after import. A plugin package
+can publish two kinds of declaration.
 
 ### Goal Catalog
 
@@ -140,6 +242,11 @@ PluginPolicy.allow_all_except({"com.example.unsafe"})
 
 Explicit IDs are optional: an ID absent from the current goal catalog is skipped and
 listed by `application.missing_policy_ids`. This supports optional installations.
+`ApplicationDefinition.required_plugin_ids`, `edition(require_plugins=...)`, and
+`Application(required_plugin_ids=...)` select IDs and make their absence a
+construction-time `PluginRequirementError` before goal setup. Required plugin wheels
+should also be ordinary package dependencies so installation and activation agree.
+
 By default, every dependency of an allowlisted plugin must also be explicitly
 allowlisted. Set `include_dependencies=True` to activate reachable
 `PluginDependency` targets recursively from the same goal catalog or plugin
@@ -149,6 +256,12 @@ application's allowlist selected them, but exact goal ID, goal API major, and ru
 plugin type checks still apply.
 The option is valid only for `allow_only()`; declared and blocklist policies already
 define their complete candidate sets.
+
+An application exposes `plugin_declaration_application_ids` and
+`application_plugin_entry_point_groups` for declaration-lineage introspection. The
+current application ID is always first; inherited IDs are normalized and
+deduplicated. Every declaration must still match the same goal-catalog distribution,
+version, and target.
 
 Catalog IDs are validated and deduplicated before any selected target is imported.
 An unselected goal-catalog entry is not imported. Blocklist mode deliberately
@@ -209,6 +322,10 @@ callback-bound like the other capabilities. `Application.elevated` exposes the s
 process snapshot to application code. On POSIX elevation means effective UID zero;
 on Windows it means an elevated process token.
 
+This is observation only. Required elevation rejects an incompatible launch, but it
+does not prove that a plugin is trusted or limit other plugins. When the application
+is elevated, all selected plugins are elevated too.
+
 ## Logging
 
 Each registration and invocation callback receives `api.logger`, already configured
@@ -235,7 +352,7 @@ log.
 
 ## State And Workspaces
 
-Plugins and the goal receive sandboxed user and workspace stores:
+Plugins and the goal receive API-namespaced user and workspace stores:
 
 ```python
 from engulf_api import StateScope
@@ -248,7 +365,7 @@ workspace.write_bytes("artifact", payload)
 
 One filename is one path component. Reads reject symbolic links and Windows reparse
 points. Writes are atomic, private, and owner-aware. Calling `directory` or `path()`
-exposes the sandboxed directory so plugins can clone repositories or manage
+exposes the namespaced directory so plugins can clone repositories or manage
 directory trees inside their own namespace. `delete()` removes a named file or tree.
 `WorkspaceState.destroy()` queues namespace destruction after postprocessing; an
 empty workspace record is pruned.
