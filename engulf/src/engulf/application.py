@@ -294,6 +294,14 @@ class Application[ResultT]:
             plugin_ids=plugin_ids,
             config=config,
         )
+        self._activated_plugin_ids = plugin_ids
+        with self._diagnostics.session() as diagnostics:
+            for plugin_id in self._activated_plugin_ids:
+                diagnostics.core.debug(
+                    "plugin %s activated",
+                    plugin_id,
+                    extra={"engulf_phase": "plugin.activation"},
+                )
         self._setup_goal()
 
     @property
@@ -441,11 +449,28 @@ class Application[ResultT]:
                 raise RuntimeError("cannot close application during an invocation")
             self._closed = True
         failures: list[Exception] = []
-        for item in self._preprocess_order:
-            try:
-                item.endpoint.close()
-            except Exception as error:  # noqa: BLE001 - endpoints are extensible.
-                failures.append(error)
+        diagnostics_manager = getattr(self, "_diagnostics", None)
+        if diagnostics_manager is None:
+            for item in self._preprocess_order:
+                try:
+                    item.endpoint.close()
+                except Exception as error:  # noqa: BLE001 - extensible endpoint.
+                    failures.append(error)
+        else:
+            with diagnostics_manager.session() as diagnostics:
+                activated_ids = frozenset(getattr(self, "_activated_plugin_ids", ()))
+                for item in self._preprocess_order:
+                    try:
+                        item.endpoint.close()
+                    except Exception as error:  # noqa: BLE001 - extensible endpoint.
+                        failures.append(error)
+                    else:
+                        if item.plugin_id in activated_ids:
+                            diagnostics.core.debug(
+                                "plugin %s deactivated",
+                                item.plugin_id,
+                                extra={"engulf_phase": "plugin.deactivation"},
+                            )
         if failures:
             raise ExceptionGroup("plugin endpoint cleanup failed", failures)
 

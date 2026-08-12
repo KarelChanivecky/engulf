@@ -227,6 +227,41 @@ class DiagnosticsTestCase(unittest.TestCase):
         )
         self.assertEqual(third, ["before_call warning"])
 
+    def test_verbose_logging_reports_plugin_activation_and_deactivation(
+        self,
+    ) -> None:
+        handler = RecordingHandler()
+        alpha = DiagnosticPlugin("tests.diagnostics.lifecycle.alpha")
+        beta = DiagnosticPlugin("tests.diagnostics.lifecycle.beta")
+
+        application = self.make_application(
+            beta,
+            alpha,
+            logging_config=LoggingConfig(
+                default_level="DEBUG",
+                handlers=(handler,),
+            ),
+        )
+        application.close()
+
+        lifecycle_records = [
+            record
+            for record in handler.records
+            if record.engulf_phase in {"plugin.activation", "plugin.deactivation"}
+        ]
+        self.assertEqual(
+            [record.getMessage() for record in lifecycle_records],
+            [
+                "plugin tests.diagnostics.lifecycle.beta activated",
+                "plugin tests.diagnostics.lifecycle.alpha activated",
+                "plugin tests.diagnostics.lifecycle.beta deactivated",
+                "plugin tests.diagnostics.lifecycle.alpha deactivated",
+            ],
+        )
+        self.assertTrue(
+            all(record.levelno == logging.DEBUG for record in lifecycle_records)
+        )
+
     def test_cli_precedence_and_controls_are_hidden_from_the_call(self) -> None:
         handler = RecordingHandler()
         alpha = DiagnosticPlugin(
