@@ -12,6 +12,7 @@ before editing it. Do not infer contracts from the removed `Engulf`, `BinaryWrap
 | `engulf` | `engulf` | `Application`, discovery, ordering, diagnostics, state, locks, and dispatch |
 | `engulf-executable-wrapper-api` | `engulf_executable_wrapper_api` | Wrapper events, contributions, registries, and plugin adapter |
 | `engulf-executable-wrapper` | `engulf_executable_wrapper` | Executable goal, process runner, help, and completion |
+| `engulf-plugin-list` | `engulf_plugin_list` | Isolated executable-wrapper plugin inventory diagnostic |
 
 Dependency direction is one-way:
 
@@ -189,11 +190,18 @@ Use callback `api.logger`; do not attach handlers or change logger levels. Regis
 logging is available after activation because unselected catalog modules are never
 imported. Retained loggers and APIs must fail outside their callback.
 
-Current plugins execute in-process with the application's full OS authority.
+Normal goal plugins execute in-process with the application's full OS authority.
 `PluginPolicy` selects code and `ElevationRequirement` reports compatibility; neither
 establishes trust or isolation. Never describe plugin state directories as an OS
 sandbox. Elevated applications must activate only trusted packages from trusted,
 non-user-writable Python and plugin locations.
+
+Diagnostic extensions are a distinct import-free discovery kind and are never
+normal goal plugins. Their targets run only in bounded Linux Bubblewrap workers
+after namespace, mount, resource, and seccomp isolation succeeds. They receive only
+sanitized request/record data over bounded JSON. If isolation is unavailable, keep
+targets unimported, warn once, and reject declared diagnostic triggers with framework
+exit 70 while leaving ordinary invocations unchanged.
 
 ## Executable-Wrapper Plugins
 
@@ -282,12 +290,12 @@ PYTHONPATH=engulf-api/src .venv/bin/python -m unittest discover -s engulf-api/te
 PYTHONPATH=engulf-api/src:engulf-executable-wrapper-api/src .venv/bin/python -m unittest discover -s engulf-executable-wrapper-api/tests -v
 PYTHONPATH=engulf-api/src:engulf/src .venv/bin/python -m unittest discover -s engulf/tests -v
 PYTHONPATH=engulf-api/src:engulf/src:engulf-executable-wrapper-api/src:engulf-executable-wrapper/src .venv/bin/python -m unittest discover -s engulf-executable-wrapper/tests -v
-.venv/bin/python -m ruff check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper examples
-.venv/bin/python -m ruff format --check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper examples
+.venv/bin/python -m ruff check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper plugins examples
+.venv/bin/python -m ruff format --check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper plugins examples
 .venv/bin/python -m mypy
 ```
 
-When package metadata changes, build all four wheels and source distributions and run
+When package metadata changes, build all five wheels and source distributions and run
 Twine checks. Do not hand-edit generated archives or publish unless explicitly asked.
 
 Use deterministic subprocess/multiprocessing coordination for lock and signal tests.
