@@ -21,7 +21,15 @@ from .goals import (
     PluginOrder,
 )
 from .identifiers import validate_global_identifier
-from .plugin import ElevationRequirement, Plugin, PluginMetadata, plugin_name
+from .plugin import (
+    ActivePlugin,
+    ElevationRequirement,
+    Plugin,
+    PluginMetadata,
+    PluginSource,
+    PluginSourceKind,
+    plugin_name,
+)
 from .plugin_api import (
     AfterGoalAPI,
     BeforeGoalAPI,
@@ -40,6 +48,7 @@ PLUGIN_API_VERSION = "1.0.0"
 __all__ = [
     "PLUGIN_API_MAJOR",
     "PLUGIN_API_VERSION",
+    "ActivePlugin",
     "AfterGoalAPI",
     "ApplicationMetadata",
     "AttributedContribution",
@@ -66,6 +75,8 @@ __all__ = [
     "PluginMetadata",
     "PluginOrder",
     "PluginPhaseError",
+    "PluginSource",
+    "PluginSourceKind",
     "RegistrationAPI",
     "StateCatalogError",
     "StateScope",
