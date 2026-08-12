@@ -457,10 +457,17 @@ class ExecutableWrapperGoalTestCase(unittest.TestCase):
             edits.add("--changed")
             edits.preempt(9)
 
-        plugin = RecordingPlugin(
-            help_text="  --plugin VALUE   Plugin option", before=edit_help
+        first = RecordingPlugin(
+            plugin_id="tests.wrapper.help.first",
+            help_text="  --first VALUE   First plugin option",
+            before=edit_help,
         )
-        engulf = self.make_application(plugin)
+        second = RecordingPlugin(
+            plugin_id="tests.wrapper.help.second",
+            help_text="  --second VALUE  Second plugin option",
+        )
+        empty = RecordingPlugin(plugin_id="tests.wrapper.help.empty")
+        engulf = self.make_application(first, second, empty)
         output = io.StringIO()
 
         with contextlib.redirect_stdout(output):
@@ -472,10 +479,26 @@ class ExecutableWrapperGoalTestCase(unittest.TestCase):
 
         self.assertEqual(result, 4)
         self.assertEqual(self.recorded_args(), ["subcommand", "--help", "topic"])
-        self.assertIn("Engulf plugin help:", output.getvalue())
-        self.assertIn("\n  --plugin VALUE", output.getvalue())
+        help_output = output.getvalue()
+        first_heading = "Plugin: tests.wrapper.help.first"
+        second_heading = "Plugin: tests.wrapper.help.second"
+        self.assertIn("Engulf plugin help:", help_output)
+        self.assertIn(
+            f"{first_heading}\n{'-' * len(first_heading)}\n"
+            "  --first VALUE   First plugin option",
+            help_output,
+        )
+        self.assertIn(
+            f"{second_heading}\n{'-' * len(second_heading)}\n"
+            "  --second VALUE  Second plugin option",
+            help_output,
+        )
+        self.assertLess(
+            help_output.index(first_heading), help_output.index(second_heading)
+        )
+        self.assertNotIn("Plugin: tests.wrapper.help.empty", help_output)
         self.assertEqual(
-            plugin.after_events[0].effective_args, ("subcommand", "--help", "topic")
+            first.after_events[0].effective_args, ("subcommand", "--help", "topic")
         )
 
     def test_help_like_value_does_not_enter_help_mode(self) -> None:

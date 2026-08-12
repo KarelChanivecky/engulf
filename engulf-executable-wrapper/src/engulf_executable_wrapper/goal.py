@@ -260,7 +260,7 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
         self._completion_provider = completion_provider
         self._arguments = ArgumentRegistry()
         self._completions = CompletionRegistry()
-        self._help_blocks: tuple[str, ...] = ()
+        self._help_blocks: tuple[tuple[str, str], ...] = ()
         self._display_name: str | None = None
         self._plugin_ids: tuple[str, ...] = ()
         self._setup_complete = False
@@ -294,11 +294,11 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
         event = _SetupEvent(self._arguments, self._completions)
         api.dispatch(_REGISTER_ARGUMENTS, event)
         api.dispatch(_REGISTER_COMPLETIONS, event)
-        help_blocks: list[str] = []
+        help_blocks: list[tuple[str, str]] = []
         for contribution in api.dispatch(_COLLECT_HELP, event):
             block = contribution.value
             if block.strip():
-                help_blocks.append(block.rstrip("\r\n"))
+                help_blocks.append((contribution.plugin_id, block.rstrip("\r\n")))
         self._help_blocks = tuple(help_blocks)
         self._setup_complete = True
 
@@ -594,9 +594,12 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
         stream.write(f"  {global_option} LEVEL\n")
         stream.write(f"  {plugin_option} PLUGIN_ID=LEVEL\n")
         if self._help_blocks:
-            stream.write("\nEngulf plugin help:\n\n")
-            stream.write("\n\n".join(self._help_blocks))
-            stream.write("\n")
+            stream.write("\nEngulf plugin help:\n")
+            for plugin_id, block in self._help_blocks:
+                heading = f"Plugin: {plugin_id}"
+                stream.write(f"\n{heading}\n")
+                stream.write(f"{'-' * len(heading)}\n")
+                stream.write(f"{block}\n")
         stream.flush()
 
 

@@ -68,8 +68,9 @@ rejected.
 When an exact `--help` argument is present, the goal invokes the executable with the
 original arguments. Plugin edits and preemption are ignored, and preparation is
 skipped. After the executable's output, Engulf appends logging options and nonempty
-plugin help blocks collected during setup. Values such as `--help=topic` remain
-normal arguments.
+plugin help blocks collected during setup. Each block appears in its own visibly
+separated section headed by the plugin's stable ID. Values such as `--help=topic`
+remain normal arguments.
 
 ## Completion
 
