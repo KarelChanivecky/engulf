@@ -161,6 +161,28 @@ legacy applications can retain in-process behavior. Plugins may declare executio
 compatibility in a future contract, but only the application can authorize an
 execution mode.
 
+### Isolated Diagnostic Extensions
+
+Diagnostics use import-free goal catalogs under
+`engulf.diagnostics.v1.goal.v<major>.<goal-id>` and a matching
+`.triggers.before_separator` group. The catalog name is the stable diagnostic ID;
+trigger names are exact reserved `--options`. Both declarations must have identical
+distribution, version, and target provenance. Diagnostics activate independently of
+`PluginPolicy` and run in deterministic distribution/ID order.
+
+Unlike normal plugins, a diagnostic target is imported only after a Linux
+Bubblewrap worker has isolated user, process, IPC, network, UTS, and cgroup
+namespaces, removed capabilities, applied resource limits, and installed a seccomp
+filter. Communication is bounded JSON, never pickle. A matching diagnostic
+invocation suppresses every invocation-time normal hook, goal phase, goal action,
+and wrapped executable. Goal setup still runs once during application construction.
+
+If Bubblewrap or required kernel isolation is unavailable, diagnostic targets stay
+unimported. Engulf emits one construction warning, continues ordinary invocations,
+and returns framework exit 70 for a declared diagnostic trigger rather than passing
+it through to the goal. Kernel vulnerabilities and side channels are outside this
+boundary; normal plugins remain fully trusted in-process code.
+
 ## Invocation Lifecycle
 
 One invocation follows this order:

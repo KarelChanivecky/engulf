@@ -12,6 +12,8 @@ from typing import Any, Self, cast
 from engulf_api import (
     ApplicationMetadata,
     AttributedContribution,
+    DiagnosticExtension,
+    DiagnosticRequest,
     Goal,
     GoalContract,
     GoalPhase,
@@ -19,6 +21,7 @@ from engulf_api import (
     Invocation,
     InvocationAPI,
     Plugin,
+    PluginExecutionRecord,
     RegistrationAPI,
     UnusedContextWarning,
 )
@@ -32,6 +35,15 @@ from ._dispatch import (
     _RuntimeGoalSetupAPI,
 )
 from ._state_platform import is_process_elevated
+from .diagnostic_extensions import (
+    BubblewrapDiagnosticRunner,
+    DiagnosticIsolationConfig,
+    _DiscoveredDiagnostic,
+    diagnostic_entry_point_group,
+    diagnostic_trigger_entry_point_group,
+    discover_diagnostics,
+    matching_diagnostics,
+)
 from .diagnostics import (
     DiagnosticsManager,
     DiagnosticsSession,
@@ -93,6 +105,7 @@ class Application[ResultT]:
         discover_installed: bool = True,
         workspace_root_resolver: WorkspaceRootResolver | None = None,
         state_home_resolver: StateHomeResolver | None = None,
+        diagnostic_isolation_config: DiagnosticIsolationConfig | None = None,
     ) -> None:
         if not isinstance(goal, Goal):
             raise TypeError("goal must be a Goal")
@@ -141,6 +154,16 @@ class Application[ResultT]:
         )
         self._workspace_root_resolver = workspace_root_resolver
         self._state_home_resolver = state_home_resolver
+        isolation_config = (
+            DiagnosticIsolationConfig()
+            if diagnostic_isolation_config is None
+            else diagnostic_isolation_config
+        )
+        if not isinstance(isolation_config, DiagnosticIsolationConfig):
+            raise TypeError(
+                "diagnostic_isolation_config must be a DiagnosticIsolationConfig"
+            )
+        self._diagnostic_isolation = isolation_config
         self._lifecycle_lock = threading.Lock()
         self._invocation_active = False
         self._closed = False
@@ -193,6 +216,22 @@ class Application[ResultT]:
         self._preprocess_order = orders.preprocess
         self._postprocess_order = orders.postprocess
         try:
+            self._diagnostic_discovery = discover_diagnostics(
+                contract.requirement,
+                isolation_config,
+                discover_installed=discover_installed,
+            )
+        except BaseException as diagnostic_discovery_error:
+            try:
+                discovery.close()
+            except Exception as cleanup_error:  # noqa: BLE001 - preserve failures.
+                raise BaseExceptionGroup(
+                    "diagnostic discovery and plugin endpoint cleanup failed",
+                    (diagnostic_discovery_error, cleanup_error),
+                ) from None
+            raise
+        self._diagnostic_runner = BubblewrapDiagnosticRunner(isolation_config)
+        try:
             self._initialize_loaded_plugins(logging_config)
         except BaseException as initialization_error:
             try:
@@ -223,6 +262,18 @@ class Application[ResultT]:
         )
         self._postprocess_plugins = tuple(
             item.active_plugin for item in self._postprocess_order
+        )
+        post_positions = {
+            item.plugin_id: position
+            for position, item in enumerate(self._postprocess_plugins, 1)
+        }
+        self._plugin_executions = tuple(
+            PluginExecutionRecord(
+                plugin=item,
+                preprocess_position=position,
+                postprocess_position=post_positions[item.plugin_id],
+            )
+            for position, item in enumerate(self._active_plugins, 1)
         )
         self._hook_runner = _HookRunner(
             self._preprocess_order,
@@ -330,6 +381,32 @@ class Application[ResultT]:
         return self._postprocess_plugins
 
     @property
+    def diagnostic_extensions(self) -> tuple[DiagnosticExtension, ...]:
+        """Return immutable import-free diagnostic-extension records."""
+        return self._diagnostic_discovery.descriptors
+
+    @property
+    def diagnostic_isolation_config(self) -> DiagnosticIsolationConfig:
+        return self._diagnostic_isolation
+
+    @property
+    def diagnostic_isolation(self) -> DiagnosticIsolationConfig:
+        """Alias for :attr:`diagnostic_isolation_config`."""
+        return self._diagnostic_isolation
+
+    @property
+    def diagnostic_entry_point_group(self) -> str:
+        return diagnostic_entry_point_group(
+            self._contract.goal_id, self._contract.api_major
+        )
+
+    @property
+    def diagnostic_trigger_entry_point_group(self) -> str:
+        return diagnostic_trigger_entry_point_group(
+            self._contract.goal_id, self._contract.api_major
+        )
+
+    @property
     def plugin_directory(self) -> Path | None:
         return self._plugin_directory
 
@@ -400,6 +477,10 @@ class Application[ResultT]:
                 raise TypeError("all invocation arguments must be strings")
             if any("\0" in argument for argument in received_args):
                 raise ValueError("invocation arguments cannot contain NUL characters")
+            matches = matching_diagnostics(self._diagnostic_discovery, received_args)
+            if matches:
+                with self._diagnostics.session(programmatic_overrides) as diagnostics:
+                    return self._invoke_diagnostics(received_args, matches, diagnostics)
             parsed = parse_logging_arguments(
                 received_args,
                 display_name=self._display_name,
@@ -436,6 +517,15 @@ class Application[ResultT]:
 
     def _setup_goal(self) -> None:
         with self._diagnostics.session() as diagnostics:
+            if (
+                self._diagnostic_discovery.diagnostics
+                and not self._diagnostic_discovery.isolation_available
+            ):
+                diagnostics.core.warning(
+                    "isolated diagnostics are unavailable: %s",
+                    self._diagnostic_discovery.unavailable_reason,
+                    extra={"engulf_phase": "diagnostic.discovery"},
+                )
             for plugin_id in self._missing_policy_ids:
                 diagnostics.core.debug(
                     "optional plugin %s is not installed for goal %s v%d",
@@ -487,6 +577,61 @@ class Application[ResultT]:
                 api.close()
                 for plugin_api in plugin_apis.values():
                     plugin_api.close()
+
+    def _invoke_diagnostics(
+        self,
+        arguments: tuple[str, ...],
+        matches: tuple[_DiscoveredDiagnostic, ...],
+        diagnostics: DiagnosticsSession,
+    ) -> GoalResult[ResultT]:
+        if not self._diagnostic_discovery.isolation_available:
+            reason = self._diagnostic_discovery.unavailable_reason or "unknown reason"
+            diagnostics.failure(
+                f"diagnostic trigger rejected because isolation is unavailable: {reason}",
+                phase="diagnostic.isolation",
+            )
+            return GoalResult.framework_failed(error="diagnostic isolation unavailable")
+        request = DiagnosticRequest(
+            arguments=arguments,
+            application=self._application_metadata,
+            goal=self._contract.requirement,
+        )
+        first_nonzero = 0
+        failures: list[str] = []
+        successful_ids: list[str] = []
+        for item in matches:
+            diagnostic_id = item.descriptor.diagnostic_id
+            try:
+                contribution = self._diagnostic_runner.run(
+                    item,
+                    request,
+                    self._active_plugins,
+                    self._plugin_executions,
+                    self._diagnostic_discovery.descriptors,
+                    self._elevated,
+                )
+            except Exception as error:  # noqa: BLE001 - isolated worker boundary.
+                failures.append(diagnostic_id)
+                diagnostics.failure(
+                    f"diagnostic {diagnostic_id} failed: {error}",
+                    phase="diagnostic.execute",
+                    error=error,
+                )
+                continue
+            successful_ids.append(diagnostic_id)
+            if contribution.stdout:
+                sys.stdout.write(contribution.stdout)
+                sys.stdout.flush()
+            if contribution.stderr:
+                sys.stderr.write(contribution.stderr)
+                sys.stderr.flush()
+            if first_nonzero == 0 and contribution.exit_code != 0:
+                first_nonzero = contribution.exit_code
+        if failures:
+            return GoalResult.framework_failed(
+                error="diagnostic extensions failed: " + ", ".join(failures)
+            )
+        return GoalResult.diagnostic(tuple(successful_ids), exit_code=first_nonzero)
 
     def _invoke(
         self,

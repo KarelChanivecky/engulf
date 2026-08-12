@@ -1,5 +1,10 @@
 from .application import FRAMEWORK_ERROR_EXIT, Application
 from .application_definition import ApplicationDefinition, GoalFactory
+from .diagnostic_extensions import (
+    DiagnosticIsolationConfig,
+    diagnostic_entry_point_group,
+    diagnostic_trigger_entry_point_group,
+)
 from .diagnostics import (
     LOG_LEVEL_NAMES,
     LoggingConfig,
@@ -31,6 +36,7 @@ __all__ = [
     "ActivePlugin",
     "Application",
     "ApplicationDefinition",
+    "DiagnosticIsolationConfig",
     "GoalFactory",
     "LogLevel",
     "LogLevelOverrides",
@@ -48,6 +54,8 @@ __all__ = [
     "WorkspaceContext",
     "WorkspaceRootResolver",
     "application_plugin_entry_point_group",
+    "diagnostic_entry_point_group",
+    "diagnostic_trigger_entry_point_group",
     "goal_plugin_entry_point_group",
     "logging_option_names",
 ]

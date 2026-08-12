@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from engulf_api import ApplicationMetadata, Goal
 
 from .application import Application
+from .diagnostic_extensions import DiagnosticIsolationConfig
 from .diagnostics import LoggingConfig, validate_display_name
 from .plugin_loader import (
     PluginPolicy,
@@ -35,6 +36,9 @@ class ApplicationDefinition[ResultT]:
     workspace_root_resolver: WorkspaceRootResolver | None = None
     state_home_resolver: StateHomeResolver | None = None
     plugin_declaration_application_ids: tuple[str, ...] = ()
+    diagnostic_isolation_config: DiagnosticIsolationConfig = field(
+        default_factory=DiagnosticIsolationConfig
+    )
 
     def __post_init__(self) -> None:
         if not callable(self.goal_factory):
@@ -45,6 +49,10 @@ class ApplicationDefinition[ResultT]:
             raise TypeError("required_plugin_ids must be a frozenset")
         if not isinstance(self.logging_config, LoggingConfig):
             raise TypeError("logging_config must be a LoggingConfig")
+        if not isinstance(self.diagnostic_isolation_config, DiagnosticIsolationConfig):
+            raise TypeError(
+                "diagnostic_isolation_config must be a DiagnosticIsolationConfig"
+            )
         if self.workspace_root_resolver is not None and not callable(
             self.workspace_root_resolver
         ):
@@ -187,6 +195,7 @@ class ApplicationDefinition[ResultT]:
             discover_installed=discover_installed,
             workspace_root_resolver=self.workspace_root_resolver,
             state_home_resolver=self.state_home_resolver,
+            diagnostic_isolation_config=self.diagnostic_isolation_config,
         )
 
 
