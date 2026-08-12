@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "engulf-plugin-list"
+version = "0.1.0"
+description = "Isolated installed-plugin diagnostic for Engulf executable wrappers"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+dependencies = ["engulf-api>=1.0,<2"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+
+[project.entry-points."engulf.diagnostics.v1.goal.v1.org_engulf_executable_wrapper"]
+"org.engulf.diagnostic.plugin-list" = "engulf_plugin_list:diagnostic"
+
+[project.entry-points."engulf.diagnostics.v1.goal.v1.org_engulf_executable_wrapper.triggers.before_separator"]
+"--engulf-plugin-list" = "engulf_plugin_list:diagnostic"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engulf_plugin_list"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/LICENSE", "/README.md", "/pyproject.toml"]
