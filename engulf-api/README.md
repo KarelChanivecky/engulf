@@ -4,6 +4,12 @@
 plugins. It intentionally contains no plugin discovery, process runner, completion
 engine, or filesystem implementation.
 
+It also defines `DiagnosticPlugin`, `DiagnosticRequest`, `DiagnosticAPI`, and
+`DiagnosticContribution` for isolated diagnostic extensions. A diagnostic request
+contains sanitized arguments and application/goal identity only. It deliberately
+has no current directory, workspace, home, or environment. Diagnostic extensions
+are not normal goal plugins and do not receive lifecycle or goal-phase APIs.
+
 The package is typed, OS-independent, and requires Python 3.14 or newer.
 
 ## Goal Contract
@@ -63,6 +69,8 @@ rejected even though Python treats them as integers.
 - `FAILED`: goal work started or was attempted but did not succeed.
 - `FRAMEWORK_FAILED`: lifecycle, callback, contract, or cleanup infrastructure
   failed. Engulf uses exit code 70 by default.
+- `DIAGNOSTIC`: one or more isolated diagnostics handled the invocation; the result
+  records their stable IDs.
 
 `Application.invoke()` returns the complete result. `Application.run()` returns only
 its exit code.

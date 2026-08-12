@@ -22,6 +22,7 @@ class GoalResultStatus(StrEnum):
     REJECTED = "rejected"
     FAILED = "failed"
     FRAMEWORK_FAILED = "framework-failed"
+    DIAGNOSTIC = "diagnostic"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +34,7 @@ class GoalResult[ResultT]:
     value: ResultT | None = None
     error: str | None = None
     rejected_by: str | None = None
+    diagnostic_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, GoalResultStatus):
@@ -42,6 +44,16 @@ class GoalResult[ResultT]:
             raise TypeError("error must be a string or None")
         if self.rejected_by is not None:
             validate_global_identifier(self.rejected_by, label="rejected_by")
+        if type(self.diagnostic_ids) is not tuple:
+            raise TypeError("diagnostic_ids must be a tuple")
+        for diagnostic_id in self.diagnostic_ids:
+            validate_global_identifier(diagnostic_id, label="diagnostic_id")
+        if self.status is not GoalResultStatus.DIAGNOSTIC and self.diagnostic_ids:
+            raise ValueError("diagnostic_ids require DIAGNOSTIC status")
+        if self.status is GoalResultStatus.DIAGNOSTIC and not self.diagnostic_ids:
+            raise ValueError("DIAGNOSTIC status requires diagnostic_ids")
+        if len(set(self.diagnostic_ids)) != len(self.diagnostic_ids):
+            raise ValueError("diagnostic_ids must be unique")
 
     @classmethod
     def completed(
@@ -87,6 +99,25 @@ class GoalResult[ResultT]:
         error: str | None = None,
     ) -> GoalResult[ResultT]:
         return cls(GoalResultStatus.FRAMEWORK_FAILED, exit_code, error=error)
+
+    @classmethod
+    def diagnostic(
+        cls,
+        diagnostic_ids: tuple[str, ...],
+        *,
+        exit_code: int = 0,
+        error: str | None = None,
+    ) -> GoalResult[ResultT]:
+        return cls(
+            GoalResultStatus.DIAGNOSTIC,
+            exit_code,
+            error=error,
+            diagnostic_ids=diagnostic_ids,
+        )
+
+    @property
+    def contributing_diagnostic_ids(self) -> tuple[str, ...]:
+        return self.diagnostic_ids
 
 
 @dataclass(frozen=True, slots=True)

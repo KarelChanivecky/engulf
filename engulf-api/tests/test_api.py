@@ -14,6 +14,9 @@ from engulf_api import (
     AttributedContribution,
     BeforeGoalAPI,
     DependencyPosition,
+    DiagnosticContribution,
+    DiagnosticExtension,
+    DiagnosticRequest,
     DiagnosticsAPI,
     ElevationRequirement,
     Goal,
@@ -269,6 +272,49 @@ class ApiTestCase(unittest.TestCase):
     def test_goal_is_abstract(self) -> None:
         with self.assertRaises(TypeError):
             Goal()  # type: ignore[abstract]
+
+    def test_diagnostic_contracts_and_result_are_validated(self) -> None:
+        request = DiagnosticRequest(
+            arguments=("--inspect",),
+            application=ApplicationMetadata(
+                application_id="tests.api.app",
+                display_name="api-app",
+                vendor="Tests",
+                product="API",
+                short_product_name="API",
+                version="1",
+            ),
+            goal=REQUIREMENT,
+        )
+        extension = DiagnosticExtension(
+            diagnostic_id="tests.api.diagnostic",
+            triggers=("--inspect",),
+            distribution="tests-api-diagnostic",
+            version="1",
+            target="tests_diagnostic:plugin",
+            available=True,
+        )
+        contribution = DiagnosticContribution(stdout="ok\n", exit_code=9)
+        result = GoalResult.diagnostic(
+            (extension.diagnostic_id,), exit_code=contribution.exit_code
+        )
+
+        self.assertEqual(request.arguments, ("--inspect",))
+        self.assertFalse(hasattr(request, "environment"))
+        self.assertFalse(hasattr(request, "cwd"))
+        self.assertIs(result.status, GoalResultStatus.DIAGNOSTIC)
+        self.assertEqual(result.contributing_diagnostic_ids, (extension.diagnostic_id,))
+        with self.assertRaises(ValueError):
+            DiagnosticContribution(exit_code=256)
+        with self.assertRaises(ValueError):
+            DiagnosticExtension(
+                diagnostic_id="tests.api.bad",
+                triggers=("not-an-option",),
+                distribution="tests",
+                version="1",
+                target="module:value",
+                available=True,
+            )
 
     def test_state_contract_is_public_and_abstract(self) -> None:
         self.assertEqual(

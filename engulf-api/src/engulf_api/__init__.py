@@ -1,5 +1,13 @@
 from .application import ApplicationMetadata
 from .dependencies import DependencyPosition, PluginDependency
+from .diagnostic_extensions import (
+    DiagnosticAPI,
+    DiagnosticContribution,
+    DiagnosticExtension,
+    DiagnosticPlugin,
+    DiagnosticRequest,
+    PluginExecutionRecord,
+)
 from .diagnostics import PluginLogger
 from .errors import (
     ContextAccessError,
@@ -55,6 +63,11 @@ __all__ = [
     "BeforeGoalAPI",
     "ContextAccessError",
     "DependencyPosition",
+    "DiagnosticAPI",
+    "DiagnosticContribution",
+    "DiagnosticExtension",
+    "DiagnosticPlugin",
+    "DiagnosticRequest",
     "DiagnosticsAPI",
     "ElevationRequirement",
     "Goal",
@@ -71,6 +84,7 @@ __all__ = [
     "MissingContextError",
     "Plugin",
     "PluginDependency",
+    "PluginExecutionRecord",
     "PluginLogger",
     "PluginMetadata",
     "PluginOrder",
