@@ -1,0 +1,35 @@
+site_name: Engulf Package Documentation
+site_description: Documentation for the Engulf Python distributions
+docs_dir: ..
+
+theme:
+  name: mkdocs
+  highlightjs: false
+
+nav:
+  - Overview: README.md
+  - Uploaded packages: /docs/packages/
+  - Engulf packages:
+      - engulf-api: engulf-api/README.md
+      - engulf: engulf/README.md
+      - engulf-executable-wrapper-api: engulf-executable-wrapper-api/README.md
+      - engulf-executable-wrapper: engulf-executable-wrapper/README.md
+      - engulf-plugin-list: plugins/engulf-plugin-list/README.md
+  - Examples:
+      - Encryption core: examples/encryption-core/README.md
+      - Encryption application: examples/encryption-app/README.md
+
+exclude_docs: |
+  AGENTS.md
+  repository/mkdocs.yml
+
+markdown_extensions:
+  - fenced_code
+  - tables
+  - toc:
+      permalink: true
+
+validation:
+  links:
+    absolute_links: relative_to_docs
+    unrecognized_links: warn

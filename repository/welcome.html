@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Engulf Python Package Repository</title>
+  </head>
+  <body>
+    <h1>Engulf Python Package Repository</h1>
+    <p>This repository currently serves {{NUMPKGS}} package files.</p>
+    <ul>
+      <li><a href="{{URL}}docs/">Package documentation</a></li>
+      <li><a href="{{URL}}docs/packages/">Uploaded package documentation</a></li>
+      <li><a href="{{PACKAGES}}">Package downloads</a></li>
+      <li><a href="{{SIMPLE}}">Python simple index</a></li>
+    </ul>
+    <p>Install a package with:</p>
+    <pre><code>python -m pip install --index-url {{URL}}simple/ PACKAGE</code></pre>
+  </body>
+</html>
