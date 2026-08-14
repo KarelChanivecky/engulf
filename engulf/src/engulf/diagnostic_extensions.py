@@ -87,6 +87,7 @@ class _ProcessOutput:
     returncode: int
     stdout: bytes
     stderr: bytes
+    mount_sources: tuple[tuple[int, str], ...] = ()
 
 
 def diagnostic_entry_point_group(goal_id: str, goal_api_major: int) -> str:
@@ -213,7 +214,7 @@ class BubblewrapDiagnosticRunner:
         except subprocess.TimeoutExpired as error:
             raise RuntimeError("diagnostic exceeded its wall timeout") from error
         if completed.stderr:
-            detail = completed.stderr.decode("utf-8", "replace")[:512]
+            detail = _process_error_detail(completed)[:512]
             raise RuntimeError(
                 f"diagnostic worker produced unexpected direct stderr: {detail!r}"
             )
@@ -271,10 +272,17 @@ def _isolation_available(
 ) -> tuple[bool, str | None]:
     if sys.platform != "linux":
         return False, "isolated diagnostics require Linux"
-    if shutil.which("bwrap") is None:
+    executable = shutil.which("bwrap")
+    if executable is None:
         return False, "Bubblewrap is not installed"
     if shutil.which("unshare") is None:
         return False, "unshare is not installed"
+    supported, reason = _supports_ro_bind_fd(
+        executable,
+        timeout=min(2.0, config.wall_timeout_seconds),
+    )
+    if not supported:
+        return False, reason
     probe = json.dumps(
         {"version": 1, "probe": True, "limits": asdict(config)},
         separators=(",", ":"),
@@ -289,7 +297,7 @@ def _isolation_available(
     except (OSError, subprocess.TimeoutExpired) as error:
         return False, f"Bubblewrap probe failed: {error}"
     if result.returncode or result.stderr:
-        detail = result.stderr.decode("utf-8", "replace").strip()
+        detail = _process_error_detail(result)
         return False, f"Bubblewrap isolation unavailable: {detail or result.returncode}"
     try:
         response = json.loads(result.stdout)
@@ -300,6 +308,24 @@ def _isolation_available(
     return True, None
 
 
+def _supports_ro_bind_fd(executable: str, *, timeout: float) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            (executable, "--help"),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            env={},
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return False, f"failed to inspect Bubblewrap capabilities: {error}"
+    help_output = result.stdout + result.stderr
+    if result.returncode != 0 or b"--ro-bind-fd" not in help_output:
+        return False, "Bubblewrap does not support required --ro-bind-fd mounts"
+    return True, ""
+
+
 def _run_bounded(
     command: list[str],
     payload: bytes,
@@ -308,7 +334,8 @@ def _run_bounded(
     limit: int,
 ) -> _ProcessOutput:
     """Run one worker while bounding both protocol pipes in host memory."""
-    prepared_command, mount_fds = _open_readonly_mount_sources(command)
+    prepared_command, mount_sources = _open_readonly_mount_sources(command)
+    mount_fds = tuple(descriptor for descriptor, _ in mount_sources)
     try:
         process = subprocess.Popen(
             prepared_command,
@@ -380,7 +407,12 @@ def _run_bounded(
         if remaining <= 0:
             raise subprocess.TimeoutExpired(command, timeout)
         returncode = process.wait(timeout=remaining)
-        return _ProcessOutput(returncode, bytes(output), bytes(error_output))
+        return _ProcessOutput(
+            returncode,
+            bytes(output),
+            bytes(error_output),
+            mount_sources,
+        )
     except BaseException:
         process.kill()
         process.wait()
@@ -394,19 +426,58 @@ def _run_bounded(
 
 def _open_readonly_mount_sources(
     command: list[str],
-) -> tuple[list[str], tuple[int, ...]]:
+) -> tuple[list[str], tuple[tuple[int, str], ...]]:
     """Open bind sources before user-namespace mappings restrict traversal."""
-    prepared = list(command)
-    descriptors: list[int] = []
+    prepared: list[str] = []
+    sources: list[tuple[int, str]] = []
     flags = getattr(os, "O_PATH", os.O_RDONLY) | os.O_CLOEXEC
-    for index, argument in enumerate(command[:-2]):
-        if argument != "--ro-bind":
-            continue
-        source_index = index + 1
-        descriptor = os.open(command[source_index], flags)
-        descriptors.append(descriptor)
-        prepared[source_index] = f"/proc/self/fd/{descriptor}"
-    return prepared, tuple(descriptors)
+    index = 0
+    try:
+        while index < len(command):
+            argument = command[index]
+            if argument != "--ro-bind":
+                prepared.append(argument)
+                index += 1
+                continue
+            if index + 2 >= len(command):
+                raise ValueError("--ro-bind requires source and destination arguments")
+            source = command[index + 1]
+            destination = command[index + 2]
+            descriptor = os.open(source, flags)
+            sources.append((descriptor, source))
+            prepared.extend(("--ro-bind-fd", str(descriptor), destination))
+            index += 3
+    except BaseException:
+        for descriptor, _ in sources:
+            os.close(descriptor)
+        raise
+    return prepared, tuple(sources)
+
+
+def _process_error_detail(result: _ProcessOutput) -> str:
+    detail = result.stderr.decode("utf-8", "replace").strip()
+    source_by_descriptor_path = {
+        f"/proc/self/fd/{descriptor}": f"{source} (mount fd {descriptor})"
+        for descriptor, source in result.mount_sources
+    }
+    replacements = 0
+    if source_by_descriptor_path:
+        descriptor_pattern = "|".join(
+            sorted(map(re.escape, source_by_descriptor_path), key=len, reverse=True)
+        )
+
+        def replace_descriptor_path(match: re.Match[str]) -> str:
+            return source_by_descriptor_path[match.group(0)]
+
+        detail, replacements = re.subn(
+            rf"(?:{descriptor_pattern})(?!\d)", replace_descriptor_path, detail
+        )
+    if detail and result.mount_sources and not replacements:
+        mounted = ", ".join(
+            f"fd {descriptor}={source}" for descriptor, source in result.mount_sources
+        )
+        detail = f"{detail} [read-only mount sources: {mounted}]"
+    return detail
 
 
 def _bubblewrap_command(

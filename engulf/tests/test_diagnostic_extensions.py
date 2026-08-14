@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import io
+import json
 import os
+import shutil
+import subprocess
+import sys
 import unittest
+from dataclasses import asdict
 from importlib.metadata import EntryPoint
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +16,12 @@ from engulf._diagnostic_worker import _diagnostic_extension
 from engulf.diagnostic_extensions import (
     DiagnosticIsolationConfig,
     _bubblewrap_command,
+    _isolation_available,
     _open_readonly_mount_sources,
+    _process_error_detail,
+    _ProcessOutput,
+    _run_bounded,
+    _supports_ro_bind_fd,
     diagnostic_entry_point_group,
     diagnostic_trigger_entry_point_group,
 )
@@ -86,15 +96,165 @@ class DiagnosticExtensionTestCase(unittest.TestCase):
             if Path(path).exists():
                 self.assertIn(path, command)
 
-        prepared, descriptors = _open_readonly_mount_sources(command)
+        prepared, mount_sources = _open_readonly_mount_sources(command)
         try:
-            self.assertTrue(descriptors)
-            for descriptor in descriptors:
-                self.assertIn(f"/proc/self/fd/{descriptor}", prepared)
+            self.assertTrue(mount_sources)
+            self.assertNotIn("--ro-bind", prepared)
+            self.assertNotIn("/proc/self/fd", " ".join(prepared))
+            for descriptor, source in mount_sources:
+                option_index = prepared.index(str(descriptor)) - 1
+                self.assertEqual(prepared[option_index], "--ro-bind-fd")
                 self.assertTrue(Path(f"/proc/self/fd/{descriptor}").exists())
+                self.assertTrue(Path(source).is_dir())
         finally:
-            for descriptor in descriptors:
+            for descriptor, _ in mount_sources:
                 os.close(descriptor)
+
+    def test_bubblewrap_capability_check_requires_fd_mount_support(self) -> None:
+        unsupported = subprocess.CompletedProcess(
+            ("bwrap", "--help"), 0, b"--ro-bind SRC DEST\n", b""
+        )
+        with patch(
+            "engulf.diagnostic_extensions.subprocess.run", return_value=unsupported
+        ):
+            available, reason = _supports_ro_bind_fd("bwrap", timeout=1.0)
+
+        self.assertFalse(available)
+        self.assertIn("--ro-bind-fd", reason)
+
+    def test_bubblewrap_errors_name_original_mount_source(self) -> None:
+        result = _ProcessOutput(
+            1,
+            b"",
+            b"bwrap: Can't find source path /proc/self/fd/4: Permission denied\n",
+            ((4, "/private/runtime"),),
+        )
+
+        detail = _process_error_detail(result)
+
+        self.assertIn("/private/runtime (mount fd 4)", detail)
+        self.assertNotIn("/proc/self/fd/4", detail)
+
+    def test_bubblewrap_error_mount_replacement_respects_fd_boundaries(self) -> None:
+        result = _ProcessOutput(
+            1,
+            b"",
+            b"bwrap: failed to mount /proc/self/fd/42\n",
+            ((4, "/runtime-four"), (42, "/runtime-forty-two")),
+        )
+
+        detail = _process_error_detail(result)
+
+        self.assertIn("/runtime-forty-two (mount fd 42)", detail)
+        self.assertNotIn("/runtime-four (mount fd 4)2", detail)
+
+    def test_invalid_readonly_mount_closes_already_opened_sources(self) -> None:
+        command = [
+            "bwrap",
+            "--ro-bind",
+            "/runtime",
+            "/sandbox-runtime",
+            "--ro-bind",
+            "/missing-destination",
+        ]
+        with (
+            patch("engulf.diagnostic_extensions.os.open", return_value=17),
+            patch("engulf.diagnostic_extensions.os.close") as close,
+            self.assertRaisesRegex(ValueError, "requires source and destination"),
+        ):
+            _open_readonly_mount_sources(command)
+
+        close.assert_called_once_with(17)
+
+    def test_worker_launch_failure_closes_readonly_mount_descriptors(self) -> None:
+        with (
+            patch(
+                "engulf.diagnostic_extensions._open_readonly_mount_sources",
+                return_value=(["bwrap"], ((17, "/runtime"),)),
+            ),
+            patch(
+                "engulf.diagnostic_extensions.subprocess.Popen",
+                side_effect=OSError("launch failed"),
+            ),
+            patch("engulf.diagnostic_extensions.os.close") as close,
+            self.assertRaisesRegex(OSError, "launch failed"),
+        ):
+            _run_bounded(["bwrap"], b"{}", timeout=1.0, limit=1024)
+
+        close.assert_called_once_with(17)
+
+    @unittest.skipUnless(
+        sys.platform == "linux" and shutil.which("bwrap") and shutil.which("unshare"),
+        "Bubblewrap isolation tools are not installed",
+    )
+    def test_supported_host_runs_real_fd_mount_probe(self) -> None:
+        entry_point = EntryPoint(
+            "tests.diagnostic.runtime",
+            "never_import_runtime:plugin",
+            diagnostic_entry_point_group(
+                TEST_GOAL_REQUIREMENT.goal_id,
+                TEST_GOAL_REQUIREMENT.api_major,
+            ),
+        )
+        config = DiagnosticIsolationConfig()
+        supported, reason = _supports_ro_bind_fd(
+            shutil.which("bwrap") or "bwrap", timeout=2.0
+        )
+        if not supported:
+            self.skipTest(reason)
+
+        payload = json.dumps(
+            {"version": 1, "probe": True, "limits": asdict(config)},
+            separators=(",", ":"),
+        ).encode()
+        try:
+            result = _run_bounded(
+                _bubblewrap_command(entry_point, config),
+                payload,
+                timeout=2.0,
+                limit=config.protocol_limit_bytes,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            self.skipTest(f"host namespace isolation is unavailable: {error}")
+        if result.returncode != 0:
+            detail = _process_error_detail(result)
+            namespace_failures = (
+                "Operation not permitted",
+                "No permissions to create new namespace",
+                "unshare failed",
+            )
+            if any(message in detail for message in namespace_failures):
+                self.skipTest(f"host namespace isolation is unavailable: {detail}")
+
+        self.assertEqual(result.returncode, 0, _process_error_detail(result))
+        self.assertEqual(json.loads(result.stdout), {"version": 1, "probe": "ok"})
+
+    def test_isolation_rejects_bubblewrap_without_fd_mounts_before_probe(self) -> None:
+        entry_point = EntryPoint(
+            "tests.diagnostic.runtime",
+            "never_import_runtime:plugin",
+            diagnostic_entry_point_group(
+                TEST_GOAL_REQUIREMENT.goal_id,
+                TEST_GOAL_REQUIREMENT.api_major,
+            ),
+        )
+        with (
+            patch(
+                "engulf.diagnostic_extensions.shutil.which", return_value="/bin/tool"
+            ),
+            patch(
+                "engulf.diagnostic_extensions._supports_ro_bind_fd",
+                return_value=(False, "Bubblewrap lacks required fd mounts"),
+            ),
+            patch("engulf.diagnostic_extensions._run_bounded") as run_bounded,
+        ):
+            available, reason = _isolation_available(
+                DiagnosticIsolationConfig(), entry_point
+            )
+
+        self.assertFalse(available)
+        self.assertEqual(reason, "Bubblewrap lacks required fd mounts")
+        run_bounded.assert_not_called()
 
     def make_application(self, *, available: bool = True) -> Application:
         catalog_group = diagnostic_entry_point_group(
