@@ -13,6 +13,7 @@ COPY engulf-executable-wrapper/README.md /source/engulf-executable-wrapper/READM
 COPY plugins/engulf-plugin-list/README.md /source/plugins/engulf-plugin-list/README.md
 COPY examples/encryption-core/README.md /source/examples/encryption-core/README.md
 COPY examples/encryption-app/README.md /source/examples/encryption-app/README.md
+COPY repository/README.md /source/repository/README.md
 COPY repository/mkdocs.yml /source/repository/mkdocs.yml
 
 RUN mkdocs build \

@@ -14,6 +14,28 @@ This workspace contains five independently publishable Python 3.14 distributions
 | `engulf-executable-wrapper/` | `engulf-executable-wrapper` | Executable goal, process runner, help, and completion |
 | `plugins/engulf-plugin-list/` | `engulf-plugin-list` | Isolated executable-wrapper plugin inventory diagnostic |
 
+## Documentation Map
+
+The documentation website renders these files directly, so each package README is
+both its package description and its authoritative developer guide. Start with the
+page that owns the contract you are using:
+
+| Task | Documentation |
+| --- | --- |
+| Define, brand, select plugins for, or invoke an application | [`engulf`](engulf/README.md) |
+| Implement a goal or a goal-specific plugin API | [`engulf-api`](engulf-api/README.md) |
+| Write an executable-wrapper plugin | [`engulf-executable-wrapper-api`](engulf-executable-wrapper-api/README.md) |
+| Run a wrapped executable or install shell completion | [`engulf-executable-wrapper`](engulf-executable-wrapper/README.md) |
+| Publish a sandboxed diagnostic extension | [Isolated diagnostic extensions](engulf/README.md#authoring-a-diagnostic-extension) |
+| Learn application editions from a complete Python-only goal | [Encryption example](examples/encryption-app/README.md) |
+| Operate the HTTPS package and documentation service | [Package repository](repository/README.md) |
+
+Import public contracts from the package top levels (`engulf_api`, `engulf`, and
+`engulf_executable_wrapper_api`). Underscore-prefixed modules and objects are
+implementation details. The API distributions expose independent major-version
+constants, while entry-point groups encode the relevant framework and goal majors.
+The packages are still alpha even where an API contract is already versioned as 1.
+
 `engulf` is not itself a binary wrapper. Wrapping an executable is one possible
 goal, implemented by `ExecutableWrapperGoal`. A goal can instead implement all of
 its work in Python, as shown by the reusable
@@ -119,7 +141,11 @@ not uploaded accidentally.
 
 ## Local Package Repository
 
-On a Linux Docker host, launch a persistent HTTPS package repository using a
+The complete flag, certificate, storage, security, endpoint, and recovery reference
+is in [`repository/README.md`](repository/README.md). The common workflow follows.
+
+On a Linux Docker host with Docker Engine, OpenSSL, curl, `flock`, `getent`, `sudo`,
+and Python 3 available, launch a persistent HTTPS package repository using a
 certificate and matching private key:
 
 ```console
@@ -197,16 +223,18 @@ untrusted public index.
 
 The repository landing page links to rendered documentation at `/docs/`. The
 documentation site is built into the container from the root overview, all five
-package READMEs, and the example application READMEs. Pip continues to use
+package READMEs, the example application READMEs, and the repository operator guide.
+Pip continues to use
 `/simple/`, independently of the browser-facing documentation routes.
 
 Every successful package upload also refreshes the uploaded package catalog at
 `/docs/packages/`. The generated catalog reads wheel or source-distribution metadata
 without installing or importing uploaded code and exposes package descriptions,
 versions, dependencies, Python requirements, project links, and distribution files.
-Existing packages are scanned when the container starts. Complete multi-page
-documentation remains linked through the package's `Documentation` project URL
-because standard distribution metadata contains only one long description.
+Existing packages are scanned when the container starts. Every generated package
+page links back to the multi-page Engulf documentation; declared project URLs are
+also shown because standard distribution metadata contains only one long
+description.
 
 Descriptions declared as `text/markdown` are rendered with headings, lists, tables,
 links, and fenced code blocks. Generated HTML is sanitized before publication;

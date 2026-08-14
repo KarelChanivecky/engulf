@@ -18,6 +18,7 @@ nav:
   - Examples:
       - Encryption core: examples/encryption-core/README.md
       - Encryption application: examples/encryption-app/README.md
+  - Package repository: repository/README.md
 
 exclude_docs: |
   AGENTS.md
