@@ -52,6 +52,16 @@ class ExamplePlugin(Plugin):
     goal_requirement = REQUIREMENT
 
 
+class ExampleGoal(Goal[str]):
+    @property
+    def contract(self) -> GoalContract:
+        return GoalContract(REQUIREMENT, ExamplePlugin)
+
+    def achieve(self, invocation: Invocation, api: GoalAPI) -> GoalResult[str]:
+        del invocation, api
+        return GoalResult.completed("complete")
+
+
 class ApiTestCase(unittest.TestCase):
     def test_api_version_matches_contract(self) -> None:
         self.assertEqual(PLUGIN_API_MAJOR, 1)
@@ -203,6 +213,7 @@ class ApiTestCase(unittest.TestCase):
                 {"KEY": "value"},
             )
         self.assertEqual(invocation.arguments, ("one",))
+        self.assertIs(ExampleGoal().normalize_invocation(invocation), invocation)
         with self.assertRaises(TypeError):
             invocation.environment["OTHER"] = "value"  # type: ignore[index]
 

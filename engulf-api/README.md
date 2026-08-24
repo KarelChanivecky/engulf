@@ -49,9 +49,12 @@ class ReportGoal(Goal[str]):
 ```
 
 `Goal.setup(api)` is an optional one-time operation performed after selected plugins
-have been discovered, validated, ordered, and checked for elevation. `Goal.achieve()`
-runs once per non-diagnostic invocation. A goal instance belongs to one application,
-so reusable application definitions must construct a fresh goal each time.
+have been discovered, validated, ordered, and checked for elevation.
+`Goal.normalize_invocation(invocation)` may return a replacement immutable invocation
+before outer plugin callbacks; its default returns the input unchanged.
+`Goal.achieve()` runs once per non-diagnostic invocation. A goal instance belongs to
+one application, so reusable application definitions must construct a fresh goal
+each time.
 
 `GoalRequirement` is the technical compatibility boundary:
 

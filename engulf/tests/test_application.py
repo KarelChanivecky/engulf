@@ -135,6 +135,19 @@ class RecordingGoal(Goal[tuple[tuple[str, str], ...]]):
         return GoalResult.completed(value)
 
 
+class NormalizingGoal(RecordingGoal):
+    def normalize_invocation(self, invocation: Invocation) -> Invocation:
+        return Invocation(
+            ("normalized", *invocation.arguments),
+            invocation.cwd,
+            {**invocation.environment, "NORMALIZED": "1"},
+        )
+
+    def achieve(self, invocation: Invocation, api: GoalAPI):
+        self.achieve_invocation = invocation
+        return super().achieve(invocation, api)
+
+
 class ApplicationTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -221,6 +234,38 @@ class ApplicationTestCase(unittest.TestCase):
                 (first.plugin_id, second.plugin_id),
             ),
         )
+
+    def test_goal_normalizes_invocation_before_outer_callbacks(self) -> None:
+        observed: list[Invocation] = []
+        goal = NormalizingGoal()
+        plugin = ApplicationPlugin(
+            "tests.application.normalized",
+            before=lambda invocation, api: observed.append(invocation),
+        )
+        application = self.make_application(goal, plugin)
+
+        result = application.invoke(("original",))
+
+        self.assertIs(result.status, GoalResultStatus.COMPLETED)
+        self.assertEqual(observed, [goal.achieve_invocation])
+        self.assertEqual(observed[0].arguments, ("normalized", "original"))
+        self.assertEqual(observed[0].environment["NORMALIZED"], "1")
+
+    def test_invalid_goal_normalization_is_a_framework_failure(self) -> None:
+        class InvalidNormalizingGoal(RecordingGoal):
+            def normalize_invocation(self, invocation: Invocation) -> Invocation:
+                del invocation
+                return object()  # type: ignore[return-value]
+
+        goal = InvalidNormalizingGoal()
+        application = self.make_application(goal)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            result = application.invoke(())
+
+        self.assertIs(result.status, GoalResultStatus.FRAMEWORK_FAILED)
+        self.assertEqual(result.exit_code, FRAMEWORK_ERROR_EXIT)
+        self.assertEqual(goal.achieve_count, 0)
 
     def test_plugin_elevation_requirements_are_enforced_and_available(self) -> None:
         blocked_goal = RecordingGoal()

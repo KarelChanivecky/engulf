@@ -542,6 +542,10 @@ class Application[ResultT]:
                 cwd,
                 dict(os.environ),
             )
+            normalized = self._goal.normalize_invocation(invocation)
+            if not isinstance(normalized, Invocation):
+                raise TypeError("goal.normalize_invocation must return an Invocation")
+            invocation = normalized
         except (OSError, TypeError, ValueError, LoggingArgumentError) as error:
             with self._diagnostics.session(programmatic_overrides) as diagnostics:
                 diagnostics.failure(

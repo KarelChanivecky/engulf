@@ -234,6 +234,10 @@ class Goal[ResultT](ABC):
     def setup(self, api: GoalSetupAPI) -> None:
         """Perform one-time setup after plugin discovery and validation."""
 
+    def normalize_invocation(self, invocation: Invocation) -> Invocation:
+        """Return goal-specific normalized inputs before outer plugin callbacks."""
+        return invocation
+
     @abstractmethod
     def achieve(
         self,

@@ -363,12 +363,13 @@ Applications can supply the config through `ApplicationDefinition` or the direct
 One invocation follows this order:
 
 1. Validate arguments and resolve per-invocation logging controls.
-2. Create immutable invocation, context, state, and diagnostics facilities.
-3. Run universal `before_goal` hooks in preprocessing order.
-4. Stop at the first returned `GoalResult`, or call `Goal.achieve()`.
-5. Let the goal dispatch any typed inner phases it defines.
-6. Run `after_goal` middleware in postprocessing order for entered plugins.
-7. Release capabilities, finalize requested workspace destruction, and report unused
+2. Create the immutable invocation and let the goal normalize it.
+3. Create context, state, and diagnostics facilities.
+4. Run universal `before_goal` hooks in preprocessing order.
+5. Stop at the first returned `GoalResult`, or call `Goal.achieve()`.
+6. Let the goal dispatch any typed inner phases it defines.
+7. Run `after_goal` middleware in postprocessing order for entered plugins.
+8. Release capabilities, finalize requested workspace destruction, and report unused
    context writes.
 
 Callback exceptions become `FRAMEWORK_FAILED` results with exit code 70. Goal phase
