@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
+_ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 class Shell(StrEnum):
     BASH = "bash"
     ZSH = "zsh"
+    FISH = "fish"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,13 +66,17 @@ class OptionSpec:
     description: str | None
     value_completer: CompletionCallable | CompletionProvider | None
     visible_to_binary_completion: bool
+    suggest_assignment: bool
     repeatable: bool
+    when: CompletionPredicate | None
+    environment: str | None
 
 
 class ArgumentRegistry:
-    """Completion metadata for arguments added by plugins.
+    """Completion and optional environment-binding metadata for plugin options.
 
-    The runtime wrapper never validates, consumes, or removes these options.
+    Options without ``environment`` are never validated, consumed, or removed by
+    the runtime wrapper.
     """
 
     def __init__(self) -> None:
@@ -87,7 +95,10 @@ class ArgumentRegistry:
         description: str | None = None,
         value_completer: CompletionCallable | CompletionProvider | None = None,
         visible_to_binary_completion: bool = False,
+        suggest_assignment: bool = True,
         repeatable: bool = False,
+        when: CompletionPredicate | None = None,
+        environment: str | None = None,
     ) -> OptionSpec:
         if not names:
             raise ValueError("an option requires at least one name")
@@ -100,6 +111,10 @@ class ArgumentRegistry:
             raise ValueError(f"option already registered: {collisions[0]}")
         if value_completer is not None and not takes_value:
             raise ValueError("value_completer requires takes_value=True")
+        if when is not None and not callable(when):
+            raise TypeError("when must be callable or None")
+        if environment is not None and _ENVIRONMENT_NAME.fullmatch(environment) is None:
+            raise ValueError("environment must be a shell-style variable name or None")
 
         spec = OptionSpec(
             names=tuple(names),
@@ -108,7 +123,10 @@ class ArgumentRegistry:
             description=description,
             value_completer=value_completer,
             visible_to_binary_completion=visible_to_binary_completion,
+            suggest_assignment=suggest_assignment,
             repeatable=repeatable,
+            when=when,
+            environment=environment,
         )
         self._options.append(spec)
         for name in names:

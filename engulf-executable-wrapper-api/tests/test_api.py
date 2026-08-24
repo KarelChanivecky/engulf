@@ -57,6 +57,23 @@ class ExecutableWrapperApiTestCase(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already registered"):
             registry.option("--one")
 
+    def test_argument_registry_records_environment_and_predicate(self) -> None:
+        registry = ArgumentRegistry()
+        predicate = lambda context: context.current.startswith("-")
+        option = registry.option(
+            "--source",
+            takes_value=True,
+            environment="EXAMPLE_SOURCE",
+            suggest_assignment=False,
+            when=predicate,
+        )
+
+        self.assertEqual(option.environment, "EXAMPLE_SOURCE")
+        self.assertFalse(option.suggest_assignment)
+        self.assertIs(option.when, predicate)
+        with self.assertRaisesRegex(ValueError, "shell-style"):
+            registry.option("--bad", environment="not-valid")
+
     def test_completion_registry_accepts_candidates_and_providers(self) -> None:
         registry = CompletionRegistry()
         registry.candidate("--static")
@@ -73,6 +90,7 @@ class ExecutableWrapperApiTestCase(unittest.TestCase):
             ["--static"],
         )
         self.assertEqual(len(registry.providers), 1)
+        self.assertEqual(Shell.FISH.value, "fish")
 
     def test_plugin_phase_signatures_use_common_managed_apis(self) -> None:
         from typing import get_type_hints

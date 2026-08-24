@@ -124,6 +124,17 @@ class CompletionTestCase(unittest.TestCase):
         self.assertNotIn("--base", [candidate.value for candidate in candidates])
         self.assertIn("--dynamic", [candidate.value for candidate in candidates])
 
+    def test_hidden_option_value_suppresses_explicit_binary_provider(self) -> None:
+        candidates = collect_candidates(
+            self.goal,
+            self.context("--plugin=a"),
+            include_binary_provider=True,
+        )
+
+        self.assertEqual(
+            [candidate.value for candidate in candidates], ["--plugin=alpha"]
+        )
+
     def test_completes_separate_and_assigned_option_values(self) -> None:
         separate = collect_candidates(
             self.goal,
@@ -171,6 +182,29 @@ class CompletionTestCase(unittest.TestCase):
                     "tests.completion.primary=info"
                 )
             ],
+        )
+
+    def test_completes_builtin_install_shell_and_output_path(self) -> None:
+        target = self.plugin_directory / "completion-target"
+        target.write_text("", encoding="utf-8")
+        shell = collect_candidates(
+            self.goal,
+            self.context("install-completion", "f"),
+            include_binary_provider=False,
+        )
+        output = collect_candidates(
+            self.goal,
+            self.context(
+                "install-completion",
+                f"--output={self.plugin_directory}/completion-t",
+            ),
+            include_binary_provider=False,
+        )
+
+        self.assertEqual([candidate.value for candidate in shell], ["fish"])
+        self.assertEqual(
+            [candidate.value for candidate in output],
+            [f"--output={target}"],
         )
 
     def test_wrapper_logging_options_are_not_completed_after_separator(self) -> None:
@@ -235,9 +269,33 @@ class CompletionTestCase(unittest.TestCase):
                 discover_installed=False,
             )
 
+    def test_completion_sourcing_is_explicit_and_typed(self) -> None:
+        self.assertTrue(
+            ExecutableWrapperGoal("echo", source_completion=True).source_completion
+        )
+        with self.assertRaisesRegex(TypeError, "source_completion must be a bool"):
+            ExecutableWrapperGoal("echo", source_completion=1)  # type: ignore[arg-type]
+
     def test_generated_shell_scripts_parse(self) -> None:
-        bash_script = render_completion_script(Shell.BASH, "wrapped", "echo")
-        zsh_script = render_completion_script(Shell.ZSH, "wrapped", "echo")
+        source = "/opt/wrapped command"
+        bash_script = render_completion_script(
+            Shell.BASH,
+            "wrapped",
+            "echo",
+            completion_source=source,
+        )
+        zsh_script = render_completion_script(
+            Shell.ZSH,
+            "wrapped",
+            "echo",
+            completion_source=source,
+        )
+        fish_script = render_completion_script(
+            Shell.FISH,
+            "wrapped",
+            "echo",
+            completion_source=source,
+        )
 
         bash = subprocess.run(
             ["bash", "-n"],
@@ -247,6 +305,7 @@ class CompletionTestCase(unittest.TestCase):
             check=False,
         )
         self.assertEqual(bash.returncode, 0, bash.stderr)
+        self.assertIn("completion bash", bash_script)
         if shutil.which("zsh"):
             zsh = subprocess.run(
                 ["zsh", "-n"],
@@ -256,6 +315,12 @@ class CompletionTestCase(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(zsh.returncode, 0, zsh.stderr)
+        self.assertIn("completion zsh", zsh_script)
+        self.assertIn("ENGULF_INTERNAL_SHELL=fish", fish_script)
+        self.assertIn("completion fish", fish_script)
+        self.assertIn("set -a _engulf_args ''", fish_script)
+        self.assertIn("printf '%s\\n'", fish_script)
+        self.assertIn("complete -c wrapped", fish_script)
 
 
 class CompletionCLITestCase(unittest.TestCase):
@@ -312,6 +377,12 @@ class CompletionCLITestCase(unittest.TestCase):
             '{"completion_service": 3}',
             '{"completion_service": ""}',
             '{"completion_service": "bad\\u0000service"}',
+            '{"completion_service": "wrapped", "completion_source": 3}',
+            '{"completion_service": "wrapped", "completion_source": ""}',
+            (
+                '{"completion_service": "wrapped", '
+                '"completion_source": "bad\\u0000source"}'
+            ),
         )
         for description in descriptions:
             with self.subTest(description=description):
@@ -359,6 +430,12 @@ class ShellCompletionIntegrationTestCase(unittest.TestCase):
                             "--plugin",
                             takes_value=True,
                             value_completer=lambda context: ["alpha", "beta"],
+                        )
+                        registry.option(
+                            "--selector",
+                            takes_value=True,
+                            value_completer=lambda context: ["default=", "node="],
+                            suggest_assignment=False,
                         )
 
                     def register_completions(self, registry, api):
@@ -415,6 +492,43 @@ class ShellCompletionIntegrationTestCase(unittest.TestCase):
             raise AssertionError("generated completion function was not found")
         return match.group(1)
 
+    def native_completion_source(self) -> Path:
+        source = self.directory / "real-command"
+        source.write_text(
+            textwrap.dedent(
+                """\
+                #!/bin/sh
+                test "$1" = completion || exit 2
+                case "$2" in
+                    bash)
+                        printf '%s\n' \\
+                            '_real_command_complete() {' \\
+                            '    if [[ $COMP_LINE == "real-command " ]]; then' \\
+                            '        COMPREPLY=("native-root")' \\
+                            '    fi' \\
+                            '}' \\
+                            'complete -F _real_command_complete real-command'
+                        ;;
+                    zsh)
+                        printf '%s\n' \\
+                            'compdef _real_command_complete real-command' \\
+                            '_real_command_complete() {' \\
+                            '    compadd -- native-root' \\
+                            '}'
+                        ;;
+                    fish)
+                        printf '%s\n' \\
+                            'complete -c real-command -f -a native-root'
+                        ;;
+                    *) exit 2 ;;
+                esac
+                """
+            ),
+            encoding="utf-8",
+        )
+        source.chmod(0o755)
+        return source
+
     def test_bash_explicit_provider_and_plugin_candidates(self) -> None:
         completion = self.directory / "wrapped.bash"
         script = render_completion_script(Shell.BASH, str(self.wrapper), "real-command")
@@ -446,8 +560,143 @@ printf '%s\n' "${{COMPREPLY[@]}}"
                 "--engulf-shell-tests-log-level=",
                 "--engulf-shell-tests-plugin-log-level=",
                 "--plugin=",
+                "--selector",
                 "--plugin-command",
             ],
+        )
+
+    def test_bash_keeps_assignment_candidates_in_the_current_word(self) -> None:
+        completion = self.directory / "wrapped-assignment.bash"
+        script = render_completion_script(Shell.BASH, str(self.wrapper), "real-command")
+        completion.write_text(script, encoding="utf-8")
+        function_name = self.function_name(script)
+        command = f"""
+compopt() {{
+    if [[ $1 == -o && $2 == nospace ]]; then
+        _engulf_test_nospace=1
+    fi
+}}
+source {shlex.quote(str(completion))}
+COMP_WORDS=({shlex.quote(str(self.wrapper))} --engulf-shell-tests-log-l)
+COMP_CWORD=1
+COMP_LINE={shlex.quote(str(self.wrapper) + " --engulf-shell-tests-log-l")}
+COMP_POINT=${{#COMP_LINE}}
+{function_name}
+printf 'nospace=%s\n' "${{_engulf_test_nospace:-0}}"
+printf '%s\n' "${{COMPREPLY[@]}}"
+"""
+
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", command],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            ["nospace=1", "--engulf-shell-tests-log-level="],
+        )
+
+    def test_bash_separate_value_option_clears_native_nospace(self) -> None:
+        completion = self.directory / "wrapped-separate-value.bash"
+        script = render_completion_script(Shell.BASH, str(self.wrapper), "real-command")
+        completion.write_text(script, encoding="utf-8")
+        function_name = self.function_name(script)
+        command = f"""
+_real_command_complete() {{
+    COMPREPLY=()
+}}
+complete -o nospace -F _real_command_complete real-command
+compopt() {{
+    if [[ $1 == -o && $2 == nospace ]]; then
+        _engulf_test_nospace=1
+    elif [[ $1 == +o && $2 == nospace ]]; then
+        _engulf_test_nospace=0
+    fi
+}}
+source {shlex.quote(str(completion))}
+COMP_WORDS=({shlex.quote(str(self.wrapper))} --sel)
+COMP_CWORD=1
+COMP_LINE={shlex.quote(str(self.wrapper) + " --sel")}
+COMP_POINT=${{#COMP_LINE}}
+{function_name}
+printf 'nospace=%s\n' "${{_engulf_test_nospace:-0}}"
+printf '%s\n' "${{COMPREPLY[@]}}"
+"""
+
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", command],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["nospace=0", "--selector"])
+
+    def test_bash_reassembles_assignment_words_without_bash_completion(self) -> None:
+        completion = self.directory / "wrapped-assignment-value.bash"
+        script = render_completion_script(Shell.BASH, str(self.wrapper), "real-command")
+        completion.write_text(script, encoding="utf-8")
+        function_name = self.function_name(script)
+        command = f"""
+source {shlex.quote(str(completion))}
+COMP_WORDS=({shlex.quote(str(self.wrapper))} --plugin = a)
+COMP_CWORD=3
+COMP_LINE={shlex.quote(str(self.wrapper) + " --plugin=a")}
+COMP_POINT=${{#COMP_LINE}}
+{function_name}
+printf '%s\n' "${{COMPREPLY[@]}}"
+"""
+
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", command],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["alpha"])
+
+    def test_bash_continues_nested_assignment_value_completion(self) -> None:
+        completion = self.directory / "wrapped-nested-assignment.bash"
+        script = render_completion_script(Shell.BASH, str(self.wrapper), "real-command")
+        completion.write_text(script, encoding="utf-8")
+        function_name = self.function_name(script)
+        command = f"""
+compopt() {{
+    if [[ $1 == -o && $2 == nospace ]]; then
+        _engulf_test_nospace=1
+    fi
+}}
+source {shlex.quote(str(completion))}
+COMP_WORDS=({shlex.quote(str(self.wrapper))} --selector =)
+COMP_CWORD=2
+COMP_LINE={shlex.quote(str(self.wrapper) + " --selector=")}
+COMP_POINT=${{#COMP_LINE}}
+{function_name}
+printf 'nospace=%s\n' "${{_engulf_test_nospace:-0}}"
+printf '%s\n' "${{COMPREPLY[@]}}"
+"""
+
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", command],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            ["nospace=1", "default=", "node="],
         )
 
     def test_bash_native_completion_receives_filtered_context(self) -> None:
@@ -479,6 +728,76 @@ printf '%s\n' "${{COMPREPLY[@]}}"
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["native:real-command current:1"])
+
+    def test_bash_sources_missing_native_completion_and_preserves_empty_word(
+        self,
+    ) -> None:
+        completion = self.directory / "wrapped-native-source.bash"
+        script = render_completion_script(
+            Shell.BASH,
+            str(self.wrapper),
+            "real-command",
+            completion_source=str(self.native_completion_source()),
+        )
+        completion.write_text(script, encoding="utf-8")
+        function_name = self.function_name(script)
+        command = f"""
+_minimal() {{
+    COMPREPLY=(minimal)
+}}
+complete -F _minimal real-command
+source {shlex.quote(str(completion))}
+COMP_WORDS=({shlex.quote(str(self.wrapper))} "")
+COMP_CWORD=1
+COMP_LINE={shlex.quote(str(self.wrapper) + " ")}
+COMP_POINT=${{#COMP_LINE}}
+{function_name}
+printf '%s\n' "${{COMPREPLY[@]}}"
+"""
+
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", command],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines()[0], "native-root")
+        self.assertNotIn("minimal", result.stdout.splitlines())
+        self.assertNotIn("--base", result.stdout.splitlines())
+
+    def test_bash_minimal_completion_does_not_suppress_binary_provider(self) -> None:
+        completion = self.directory / "wrapped-minimal.bash"
+        script = render_completion_script(Shell.BASH, str(self.wrapper), "real-command")
+        completion.write_text(script, encoding="utf-8")
+        function_name = self.function_name(script)
+        command = f"""
+_minimal() {{
+    COMPREPLY=(minimal)
+}}
+complete -F _minimal real-command
+source {shlex.quote(str(completion))}
+COMP_WORDS=({shlex.quote(str(self.wrapper))} --)
+COMP_CWORD=1
+COMP_LINE={shlex.quote(str(self.wrapper) + " --")}
+COMP_POINT=${{#COMP_LINE}}
+{function_name}
+printf '%s\n' "${{COMPREPLY[@]}}"
+"""
+
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", command],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--base", result.stdout.splitlines())
+        self.assertNotIn("minimal", result.stdout.splitlines())
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_explicit_provider_and_plugin_candidates(self) -> None:
@@ -523,6 +842,7 @@ print -rl -- "${{captured[@]}}"
                 "--engulf-shell-tests-log-level=",
                 "--engulf-shell-tests-plugin-log-level=",
                 "--plugin=",
+                "--selector",
                 "--plugin-command",
             ],
         )
@@ -568,6 +888,52 @@ print -rl -- "${{captured[@]}}"
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["native:real-command current:2"])
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_sources_missing_native_completion(self) -> None:
+        completion = self.directory / "_wrapped-native-source"
+        script = render_completion_script(
+            Shell.ZSH,
+            str(self.wrapper),
+            "real-command",
+            completion_source=str(self.native_completion_source()),
+        )
+        completion.write_text(script, encoding="utf-8")
+        function_name = self.function_name(script)
+        command = f"""
+typeset -A _comps
+typeset -ga captured
+compdef() {{
+    _comps[$2]=$1
+}}
+compadd() {{
+    while (( $# )); do
+        if [[ $1 == -- ]]; then
+            shift
+            break
+        fi
+        shift
+    done
+    captured+=("$@")
+}}
+source {shlex.quote(str(completion))}
+words=({shlex.quote(str(self.wrapper))} "")
+CURRENT=2
+{function_name}
+print -rl -- "${{captured[@]}}"
+"""
+
+        result = subprocess.run(
+            ["zsh", "-f", "-c", command],
+            text=True,
+            capture_output=True,
+            env=self.environment(),
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines()[0], "native-root")
+        self.assertNotIn("--base", result.stdout.splitlines())
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_fpath_autoload_completes_on_first_invocation(self) -> None:
@@ -618,6 +984,7 @@ print -rl -- "${{captured[@]}}"
                 "--engulf-shell-tests-log-level=",
                 "--engulf-shell-tests-plugin-log-level=",
                 "--plugin=",
+                "--selector",
                 "--plugin-command",
             ],
         )

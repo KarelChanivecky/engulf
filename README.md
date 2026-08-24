@@ -45,7 +45,7 @@ its work in Python, as shown by the reusable
 `engulf-api`, `engulf`, and goal API contracts are OS-independent. The core state
 runtime selects a POSIX or Windows security and locking backend. The executable
 wrapper runtime remains Linux-specific because its process-group, signal-forwarding,
-and Bash/Zsh completion behavior is part of that goal.
+and Bash/Zsh/Fish completion behavior is part of that goal.
 
 ## Installing Published Packages
 

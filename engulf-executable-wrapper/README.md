@@ -4,7 +4,7 @@
 executable while preserving Engulf's managed plugin lifecycle.
 
 This goal runtime targets Linux. Its process-group behavior, forwarded POSIX signal
-set, and Bash/Zsh completion integration are deliberate goal-level platform
+set, and Bash/Zsh/Fish completion integration are deliberate goal-level platform
 requirements; the `engulf` plugin framework itself is OS-independent.
 
 ## Wrapping A Command
@@ -52,13 +52,20 @@ sandbox or trust grant mechanism.
 `Application.invoke()` returns `GoalResult[CallOutcome]`. `Application.run()` returns
 the executable, preemption, spawn-failure, or framework exit code.
 
-`ExecutableWrapperGoal(executable, *, completion_provider=None)` accepts a nonempty
-text command or path. A bare command is resolved through `PATH` for each invocation; a
-path is expanded for `~` and made absolute. The optional provider supplies fallback
-completion for the wrapped command when the shell has no native completion. The
-`executable` and `completion_provider` properties expose that configuration;
+`ExecutableWrapperGoal(executable, *, completion_provider=None,
+source_completion=False)` accepts a nonempty text command or path. A bare command is
+resolved through `PATH` for each invocation; a path is expanded for `~` and made
+absolute. The optional provider supplies fallback completion for the wrapped command
+when the shell has no native completion. `source_completion=True` additionally lets
+the generated shell integration invoke the executable as `completion <shell>` and
+source its output when no real native completion is registered. The `executable`,
+`completion_provider`, and `source_completion` properties expose that configuration;
 `arguments` and `completions` expose the setup-owned metadata registries used by
 completion integration.
+
+Completion sourcing is an explicit application opt-in because the generated output
+executes in the interactive shell. Enable it only for a trusted executable with the
+documented `completion bash|zsh|fish` contract.
 
 The goal's `contract`, `setup()`, and `achieve()` implement the managed `Goal`
 lifecycle and are called by `Application`; application code should not invoke them
@@ -68,13 +75,15 @@ directly.
 
 For each normal invocation, the goal:
 
-1. dispatches every plugin's side-effect-free `analyze_call`;
-2. validates and merges all argument contributions;
-3. resolves preemption before external preparation;
-4. dispatches `prepare_call` only when execution remains viable;
-5. executes the child while forwarding wrapper signals;
-6. dispatches `after_call` in postprocessing order;
-7. returns a typed outcome to outer `after_goal` middleware.
+1. consumes registered environment-backed wrapper options and overlays their values
+   before outer plugin callbacks;
+2. dispatches every plugin's side-effect-free `analyze_call`;
+3. validates and merges all argument contributions;
+4. resolves preemption before external preparation;
+5. dispatches `prepare_call` only when execution remains viable;
+6. executes the child while forwarding wrapper signals;
+7. dispatches `after_call` in postprocessing order;
+8. returns a typed outcome to outer `after_goal` middleware.
 
 The child shares the wrapper's existing process group. This preserves controlling
 terminal and shell job-control behavior. While the child is alive, temporary handlers
@@ -121,15 +130,38 @@ appends its own sections. The child exit remains the invocation exit.
 
 ## Completion
 
-The goal mirrors existing Bash and Zsh completion for the wrapped executable and
+The goal mirrors existing Bash, Zsh, and Fish completion for the wrapped executable and
 merges plugin candidates. Wrapper-only options are removed from the completion
 context sent to native executable completion.
 
-Generate a script after installing this distribution:
+Install completion through the wrapper command itself:
+
+```console
+my-wrapper install-completion bash
+my-wrapper install-completion zsh
+my-wrapper install-completion fish
+```
+
+With no shell argument, the command detects Bash, Zsh, or Fish from `SHELL`. Default
+destinations honor XDG directories:
+
+| Shell | Default path |
+| --- | --- |
+| Bash | `$XDG_DATA_HOME/bash-completion/completions/my-wrapper` |
+| Zsh | `$XDG_DATA_HOME/zsh/site-functions/_my-wrapper` |
+| Fish | `$XDG_CONFIG_HOME/fish/completions/my-wrapper.fish` |
+
+Use `--output PATH` for an explicit location. The installer creates parent
+directories and atomically replaces a prior Engulf-generated regular file. It
+refuses symlinks, non-files, and unrecognized existing content. For Zsh, ensure
+the reported directory is on `fpath` before `compinit`.
+
+The standalone generator remains available for packaging or inspection workflows:
 
 ```console
 engulf-completion bash my-wrapper > ~/.local/share/bash-completion/completions/my-wrapper
 engulf-completion zsh my-wrapper > ~/.local/share/zsh/site-functions/_my-wrapper
+engulf-completion fish my-wrapper > ~/.config/fish/completions/my-wrapper.fish
 
 # Or let the generator write the file:
 engulf-completion bash my-wrapper \
@@ -137,9 +169,12 @@ engulf-completion bash my-wrapper \
 ```
 
 The generator invokes the wrapper through a private environment protocol to discover
-the wrapped executable. Source generated Bash completion after the wrapped command's
-native completion. For Zsh, place the file on `fpath` before `compinit` or source it
-after `compinit`.
+the wrapped executable and whether the application opted into completion sourcing.
+Existing native completion is preferred. When sourcing is enabled and no native
+completion is registered, the integration sources `<executable> completion <shell>`
+once and then rechecks the shell's completion registry. Bash's generic `_minimal`
+fallback is not treated as native completion. For Zsh, place the generated wrapper
+file on `fpath` before `compinit` or source it after `compinit`.
 
 Application-defined binary providers are used only when no native completion was
 found. Static and dynamic plugin candidates are merged and deduplicated.
@@ -158,17 +193,24 @@ script = render_completion_script(
     Shell.BASH,
     wrapper_command="my-wrapper",
     binary_service="wrapped-command",
+    completion_source="/usr/bin/wrapped-command",
 )
 ```
 
 `binary_service` is the native completion service name, normally the basename of
-the configured executable. Both names must be nonempty and NUL-free. The
+the configured executable. `completion_source` is optional and names the trusted
+executable whose `completion <shell>` output may be sourced. All supplied names must
+be nonempty and NUL-free. The
 `ENGULF_INTERNAL_*` environment protocol embedded in generated scripts is private;
 applications and plugins must not call or extend it.
 
 Wrapper-only registered options and their values are hidden from native completion
 before `--` unless their `OptionSpec` explicitly sets
 `visible_to_binary_completion=True`. Options after `--` remain native arguments.
+Native and fallback binary completion are skipped while the cursor is inside a
+hidden wrapper option or its value. The Bash integration reassembles assignments
+split by `COMP_WORDBREAKS` and keeps candidates ending in `=` or a directory `/`
+in the current word so chained value completion can continue.
 When native completion exists, it supplies binary candidates and suppresses the
 application's fallback binary provider; plugin option, static, and dynamic
 candidates are still merged.

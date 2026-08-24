@@ -207,13 +207,17 @@ class ExecutableWrapperGoalTestCase(unittest.TestCase):
         self,
         *plugins: ExecutableWrapperPlugin,
         binary: str | os.PathLike[str] | None = None,
+        source_completion: bool = False,
     ) -> Application:
         with patch(
             "engulf.application.load_directory_plugins", return_value=tuple(plugins)
         ):
             return Application(
                 "engulf-lifecycle-tests",
-                ExecutableWrapperGoal(binary or self.binary),
+                ExecutableWrapperGoal(
+                    binary or self.binary,
+                    source_completion=source_completion,
+                ),
                 display_name="engulf-lifecycle-tests",
                 vendor="Engulf Tests",
                 product="Executable Wrapper Tests",
@@ -251,6 +255,170 @@ class ExecutableWrapperGoalTestCase(unittest.TestCase):
             plugin.after_events[0].effective_args, ("one", "two words", "--flag=value")
         )
         self.assertEqual(plugin.after_events[0].outcome.kind, OutcomeKind.COMPLETED)
+
+    def test_environment_options_normalize_before_outer_and_goal_callbacks(
+        self,
+    ) -> None:
+        seen_invocations = []
+
+        class EnvironmentPlugin(RecordingPlugin):
+            def register_arguments(self, registry, api) -> None:
+                del api
+                registry.option(
+                    "--runtime-source",
+                    takes_value=True,
+                    environment="RUNTIME_SOURCE",
+                )
+
+            def before_goal(self, invocation, api):
+                del api
+                seen_invocations.append(invocation)
+
+        plugin = EnvironmentPlugin()
+        application = self.make_application(plugin)
+
+        result = self.run_application(
+            application,
+            ["deploy", "--runtime-source", "from-cli", "--flag"],
+            RUNTIME_SOURCE="from-environment",
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(self.recorded_args(), ["deploy", "--flag"])
+        self.assertEqual(seen_invocations[0].arguments, ("deploy", "--flag"))
+        self.assertEqual(seen_invocations[0].environment["RUNTIME_SOURCE"], "from-cli")
+        self.assertEqual(
+            plugin.before_events[0].environment["RUNTIME_SOURCE"], "from-cli"
+        )
+        self.assertEqual(
+            plugin.prepare_events[0].environment["RUNTIME_SOURCE"], "from-cli"
+        )
+
+    def test_environment_option_requires_one_value(self) -> None:
+        class EnvironmentPlugin(RecordingPlugin):
+            def register_arguments(self, registry, api) -> None:
+                del api
+                registry.option(
+                    "--runtime-source",
+                    takes_value=True,
+                    environment="RUNTIME_SOURCE",
+                )
+
+        result = self.run_application(
+            self.make_application(EnvironmentPlugin()),
+            ["deploy", "--runtime-source"],
+        )
+
+        self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
+        self.assertFalse(self.record.exists())
+
+    def test_environment_switch_is_consumed_and_duplicate_is_rejected(self) -> None:
+        class EnvironmentPlugin(RecordingPlugin):
+            def register_arguments(self, registry, api) -> None:
+                del api
+                registry.option("--runtime-update", environment="RUNTIME_UPDATE")
+
+        plugin = EnvironmentPlugin()
+        application = self.make_application(plugin)
+
+        self.assertEqual(
+            self.run_application(application, ["deploy", "--runtime-update"]),
+            0,
+        )
+        self.assertEqual(self.recorded_args(), ["deploy"])
+        self.assertEqual(plugin.before_events[0].environment["RUNTIME_UPDATE"], "1")
+
+        self.record.unlink()
+        self.assertEqual(
+            self.run_application(
+                application,
+                ["deploy", "--runtime-update", "--runtime-update"],
+            ),
+            FRAMEWORK_ERROR_EXIT,
+        )
+        self.assertFalse(self.record.exists())
+
+    def test_install_completion_writes_without_starting_binary(self) -> None:
+        application = self.make_application()
+        data_home = self.directory / "data"
+
+        result = self.run_application(
+            application,
+            ["install-completion", "bash"],
+            HOME=str(self.directory),
+            XDG_DATA_HOME=str(data_home),
+        )
+
+        target = (
+            data_home / "bash-completion" / "completions" / "engulf-lifecycle-tests"
+        )
+        self.assertEqual(result, 0)
+        self.assertTrue(target.is_file())
+        self.assertIn("ENGULF_INTERNAL_ACTION=complete", target.read_text())
+        self.assertFalse(self.record.exists())
+
+    def test_install_completion_can_source_the_wrapped_completion_command(self) -> None:
+        application = self.make_application(source_completion=True)
+        target = self.directory / "completion"
+
+        result = self.run_application(
+            application,
+            ["install-completion", "bash", "--output", str(target)],
+        )
+
+        self.assertEqual(result, 0)
+        script = target.read_text(encoding="utf-8")
+        self.assertIn(str(self.binary), script)
+        self.assertIn("completion bash", script)
+        self.assertFalse(self.record.exists())
+
+    def test_install_completion_detects_fish_and_uses_config_home(self) -> None:
+        application = self.make_application()
+        config_home = self.directory / "config"
+
+        result = self.run_application(
+            application,
+            ["install-completion"],
+            HOME=str(self.directory),
+            XDG_CONFIG_HOME=str(config_home),
+            SHELL="/usr/bin/fish",
+        )
+
+        target = config_home / "fish" / "completions" / "engulf-lifecycle-tests.fish"
+        self.assertEqual(result, 0)
+        self.assertIn("complete -c", target.read_text())
+        self.assertFalse(self.record.exists())
+
+    def test_install_completion_refuses_unrecognized_existing_file(self) -> None:
+        application = self.make_application()
+        target = self.directory / "custom-completion"
+        target.write_text("# maintained by the user\n", encoding="utf-8")
+
+        result = self.run_application(
+            application,
+            ["install-completion", "bash", "--output", str(target)],
+            HOME=str(self.directory),
+        )
+
+        self.assertEqual(result, 2)
+        self.assertEqual(target.read_text(), "# maintained by the user\n")
+        self.assertFalse(self.record.exists())
+
+    def test_install_completion_refreshes_generated_zsh_file(self) -> None:
+        application = self.make_application()
+        target = self.directory / "_wrapped"
+        arguments = ["install-completion", "zsh", "--output", str(target)]
+
+        self.assertEqual(
+            self.run_application(application, arguments, HOME=str(self.directory)),
+            0,
+        )
+        self.assertEqual(
+            self.run_application(application, arguments, HOME=str(self.directory)),
+            0,
+        )
+        self.assertTrue(target.read_text().startswith("#compdef"))
+        self.assertFalse(self.record.exists())
 
     def test_merges_deferred_removals_and_isolated_additions(self) -> None:
         seen = []

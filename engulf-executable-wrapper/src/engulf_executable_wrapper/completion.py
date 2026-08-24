@@ -32,6 +32,9 @@ def handle_internal_protocol(
             {
                 "executable": goal.executable,
                 "completion_service": Path(goal.executable).name,
+                "completion_source": (
+                    goal.executable if goal.source_completion else None
+                ),
             },
             sys.stdout,
         )
@@ -43,10 +46,11 @@ def handle_internal_protocol(
     words = _ensure_current_word(argv, cursor_index)
 
     if action == "normalize":
-        normalized, normalized_cursor = normalize_for_binary(
+        normalized, normalized_cursor, current_hidden = _normalize_for_binary(
             goal.arguments, words, cursor_index
         )
-        _write_nul_records((str(normalized_cursor), *normalized))
+        protocol_cursor = -1 if current_hidden else normalized_cursor
+        _write_nul_records((str(protocol_cursor), *normalized))
         return 0
 
     if action == "complete":
@@ -77,7 +81,14 @@ def collect_candidates(
 ) -> tuple[CompletionCandidate, ...]:
     candidates: list[CompletionCandidate] = []
 
-    if include_binary_provider and goal.completion_provider is not None:
+    current_hidden = context.cursor_index in _hidden_binary_indexes(
+        goal.arguments, context.words
+    )
+    if (
+        include_binary_provider
+        and not current_hidden
+        and goal.completion_provider is not None
+    ):
         candidates.extend(_provider_candidates(goal.completion_provider, context))
 
     candidates.extend(_argument_candidates(goal.arguments, context))
@@ -130,11 +141,19 @@ def _argument_candidates(
     if "--" in prior_words:
         return result
     for spec in registry.options:
+        if spec.when is not None and not spec.when(context):
+            continue
         if not spec.repeatable and _option_was_used(spec.names, prior_words):
             continue
         for name in spec.names:
             if name.startswith(current):
-                suffix = "=" if spec.takes_value and name.startswith("--") else ""
+                suffix = (
+                    "="
+                    if spec.takes_value
+                    and spec.suggest_assignment
+                    and name.startswith("--")
+                    else ""
+                )
                 result.append(CompletionCandidate(name + suffix, spec.description))
     return result
 
@@ -179,6 +198,44 @@ def normalize_for_binary(
     words: tuple[str, ...],
     cursor_index: int,
 ) -> tuple[tuple[str, ...], int]:
+    normalized, normalized_cursor, _current_hidden = _normalize_for_binary(
+        registry, words, cursor_index
+    )
+    return normalized, normalized_cursor
+
+
+def _normalize_for_binary(
+    registry: ArgumentRegistry,
+    words: tuple[str, ...],
+    cursor_index: int,
+) -> tuple[tuple[str, ...], int, bool]:
+    hidden = _hidden_binary_indexes(registry, words)
+    current_hidden = cursor_index in hidden
+
+    normalized: list[str] = []
+    normalized_cursor: int | None = None
+    for original_index, word in enumerate(words):
+        if original_index in hidden:
+            if original_index == cursor_index:
+                normalized_cursor = len(normalized)
+                normalized.append("")
+            continue
+        normalized.append(word)
+        if original_index == cursor_index:
+            normalized_cursor = len(normalized) - 1
+
+    if normalized_cursor is None:
+        normalized_cursor = sum(
+            1 for index in range(cursor_index) if index not in hidden
+        )
+        normalized.insert(min(normalized_cursor, len(normalized)), "")
+    return tuple(normalized), normalized_cursor, current_hidden
+
+
+def _hidden_binary_indexes(
+    registry: ArgumentRegistry,
+    words: tuple[str, ...],
+) -> frozenset[int]:
     hidden: set[int] = set()
     index = 0
     while index < len(words):
@@ -203,31 +260,15 @@ def normalize_for_binary(
             index += 2
         else:
             index += 1
-
-    normalized: list[str] = []
-    normalized_cursor: int | None = None
-    for original_index, word in enumerate(words):
-        if original_index in hidden:
-            if original_index == cursor_index:
-                normalized_cursor = len(normalized)
-                normalized.append("")
-            continue
-        normalized.append(word)
-        if original_index == cursor_index:
-            normalized_cursor = len(normalized) - 1
-
-    if normalized_cursor is None:
-        normalized_cursor = sum(
-            1 for index in range(cursor_index) if index not in hidden
-        )
-        normalized.insert(min(normalized_cursor, len(normalized)), "")
-    return tuple(normalized), normalized_cursor
+    return frozenset(hidden)
 
 
 def render_completion_script(
     shell: Shell,
     wrapper_command: str,
     binary_service: str,
+    *,
+    completion_source: str | None = None,
 ) -> str:
     if not wrapper_command or "\0" in wrapper_command:
         raise ValueError(
@@ -237,27 +278,87 @@ def render_completion_script(
         raise ValueError(
             "binary service must be a non-empty string without NUL characters"
         )
+    if completion_source is not None:
+        if not isinstance(completion_source, str):
+            raise TypeError("completion source must be a string or None")
+        if not completion_source or "\0" in completion_source:
+            raise ValueError(
+                "completion source must be non-empty and contain no NUL characters"
+            )
     if shell is Shell.BASH:
-        return _render_bash(wrapper_command, binary_service)
+        return _render_bash(wrapper_command, binary_service, completion_source)
     if shell is Shell.ZSH:
-        return _render_zsh(wrapper_command, binary_service)
+        return _render_zsh(wrapper_command, binary_service, completion_source)
+    if shell is Shell.FISH:
+        return _render_fish(wrapper_command, binary_service, completion_source)
     raise ValueError(f"unsupported shell: {shell}")
 
 
-def _render_bash(wrapper_command: str, binary_service: str) -> str:
+def _render_bash(
+    wrapper_command: str,
+    binary_service: str,
+    completion_source: str | None,
+) -> str:
     suffix = _identifier_suffix(wrapper_command)
     function_name = f"_engulf_complete_{suffix}"
+    source_marker = f"_engulf_source_attempted_{suffix}"
     wrapper_literal = shlex.quote(wrapper_command)
     binary_literal = shlex.quote(binary_service)
+    source_literal = shlex.quote(completion_source or "")
     command_literal = shlex.quote(wrapper_command)
-    return f"""# Generated by engulf-completion. Source this file after the wrapped command's completion.
+    return f"""# Generated by engulf-completion. Existing wrapped-command completion is preferred.
+{source_marker}=0
 {function_name}() {{
     local _engulf_wrapper={wrapper_literal}
     local _engulf_binary={binary_literal}
-    local _engulf_arg_index=$((COMP_CWORD - 1))
-    local -a _engulf_args=("${{COMP_WORDS[@]:1}}")
+    local _engulf_completion_source={source_literal}
+    local _engulf_arg_index
+    local -a _engulf_args
+    local _engulf_current=""
+    local _engulf_cword=$COMP_CWORD
+    local -a _engulf_words=()
+    if declare -F _get_comp_words_by_ref >/dev/null \
+            && _get_comp_words_by_ref -n = -c _engulf_current \
+                -i _engulf_cword -w _engulf_words; then
+        _engulf_arg_index=$((_engulf_cword - 1))
+        _engulf_args=("${{_engulf_words[@]:1}}")
+    else
+        local _engulf_raw_index=$((COMP_CWORD - 1))
+        local -a _engulf_raw_args=("${{COMP_WORDS[@]:1}}")
+        local _engulf_index
+        local _engulf_join_next=0
+        _engulf_args=()
+        _engulf_arg_index=0
+        for ((_engulf_index = 0; \
+                _engulf_index < ${{#_engulf_raw_args[@]}}; \
+                _engulf_index++)); do
+            local _engulf_word=${{_engulf_raw_args[_engulf_index]}}
+            if [[ $_engulf_word == = && ${{#_engulf_args[@]}} -gt 0 ]]; then
+                _engulf_args[-1]+="="
+                _engulf_join_next=1
+            elif (( _engulf_join_next )); then
+                _engulf_args[-1]+=$_engulf_word
+                _engulf_join_next=0
+            else
+                _engulf_args+=("$_engulf_word")
+            fi
+            if (( _engulf_index == _engulf_raw_index )); then
+                _engulf_arg_index=$((${{#_engulf_args[@]}} - 1))
+            fi
+        done
+    fi
     if (( _engulf_arg_index >= ${{#_engulf_args[@]}} )); then
         _engulf_args+=("")
+    fi
+    local _engulf_raw_current=${{COMP_WORDS[COMP_CWORD]-}}
+    local _engulf_logical_current=${{_engulf_args[_engulf_arg_index]-}}
+    local _engulf_reply_prefix=""
+    if [[ $_engulf_raw_current == = ]]; then
+        _engulf_reply_prefix=$_engulf_logical_current
+    elif [[ -n $_engulf_raw_current \
+            && $_engulf_logical_current != "$_engulf_raw_current" \
+            && $_engulf_logical_current == *"$_engulf_raw_current" ]]; then
+        _engulf_reply_prefix=${{_engulf_logical_current%"$_engulf_raw_current"}}
     fi
 
     local -a _engulf_normalized=()
@@ -285,17 +386,46 @@ def _render_bash(wrapper_command: str, binary_service: str) -> str:
         _engulf_base_function=${{BASH_REMATCH[2]}}
     fi
 
+    local _engulf_has_native=0
+    if [[ -n $_engulf_base_function && $_engulf_base_function != _minimal ]] \
+            && declare -F "$_engulf_base_function" >/dev/null; then
+        _engulf_has_native=1
+    fi
+    if (( ! _engulf_has_native && ! {source_marker} )) \
+            && [[ -n $_engulf_completion_source ]] \
+            && command -v "$_engulf_completion_source" >/dev/null 2>&1; then
+        {source_marker}=1
+        builtin source <(
+            command "$_engulf_completion_source" completion bash 2>/dev/null
+        ) >/dev/null 2>&1 || true
+        _engulf_spec=$(complete -p "$_engulf_binary" 2>/dev/null) || true
+        _engulf_base_function=""
+        if [[ $_engulf_spec =~ (^|[[:space:]])-F[[:space:]]+([_[:alnum:]:-]+)($|[[:space:]]) ]]; then
+            _engulf_base_function=${{BASH_REMATCH[2]}}
+        fi
+        if [[ -n $_engulf_base_function && $_engulf_base_function != _minimal ]] \
+                && declare -F "$_engulf_base_function" >/dev/null; then
+            _engulf_has_native=1
+        fi
+    fi
+
     local _engulf_native=0
     local -a _engulf_native_replies=()
-    if [[ -n $_engulf_base_function ]] && declare -F "$_engulf_base_function" >/dev/null; then
+    (( _engulf_has_native )) && _engulf_native=1
+    if (( _engulf_has_native && _engulf_normalized_index >= 0 )); then
         local -a _engulf_saved_words=("${{COMP_WORDS[@]}}")
         local _engulf_saved_cword=$COMP_CWORD
         local _engulf_saved_line=$COMP_LINE
         local _engulf_saved_point=$COMP_POINT
         COMP_WORDS=("$_engulf_binary" "${{_engulf_binary_args[@]}}")
         COMP_CWORD=$((_engulf_normalized_index + 1))
-        printf -v COMP_LINE '%q ' "${{COMP_WORDS[@]}}"
-        COMP_LINE=${{COMP_LINE% }}
+        local -a _engulf_line_words=("${{COMP_WORDS[@]:0:COMP_CWORD}}")
+        printf -v COMP_LINE '%q ' "${{_engulf_line_words[@]}}"
+        if [[ -n ${{COMP_WORDS[COMP_CWORD]-}} ]]; then
+            local _engulf_quoted_current
+            printf -v _engulf_quoted_current '%q' "${{COMP_WORDS[COMP_CWORD]}}"
+            COMP_LINE+=$_engulf_quoted_current
+        fi
         COMP_POINT=${{#COMP_LINE}}
         COMPREPLY=()
         "$_engulf_base_function" "$_engulf_binary" \\
@@ -305,7 +435,6 @@ def _render_bash(wrapper_command: str, binary_service: str) -> str:
         COMP_CWORD=$_engulf_saved_cword
         COMP_LINE=$_engulf_saved_line
         COMP_POINT=$_engulf_saved_point
-        _engulf_native=1
         local _engulf_option
         for _engulf_option in bashdefault default dirnames filenames noquote nosort nospace plusdirs; do
             if [[ " $_engulf_spec " == *" -o $_engulf_option "* ]]; then
@@ -322,6 +451,16 @@ def _render_bash(wrapper_command: str, binary_service: str) -> str:
             ENGULF_INTERNAL_WRAPPER_COMMAND="$_engulf_wrapper" \\
             "$_engulf_wrapper" "${{_engulf_args[@]}}" 2>/dev/null
     )
+    if [[ -n $_engulf_reply_prefix ]]; then
+        local _engulf_extra_index
+        for ((_engulf_extra_index = 0; \
+                _engulf_extra_index < ${{#_engulf_extra[@]}}; \
+                _engulf_extra_index++)); do
+            if [[ ${{_engulf_extra[_engulf_extra_index]}} == "$_engulf_reply_prefix"* ]]; then
+                _engulf_extra[_engulf_extra_index]=${{_engulf_extra[_engulf_extra_index]#"$_engulf_reply_prefix"}}
+            fi
+        done
+    fi
 
     COMPREPLY=()
     local -A _engulf_seen=()
@@ -332,23 +471,45 @@ def _render_bash(wrapper_command: str, binary_service: str) -> str:
         _engulf_seen["$_engulf_candidate"]=1
         COMPREPLY+=("$_engulf_candidate")
     done
+    if (( ${{#COMPREPLY[@]}} )); then
+        local _engulf_continues=1
+        for _engulf_candidate in "${{COMPREPLY[@]}}"; do
+            if [[ $_engulf_candidate != *= && $_engulf_candidate != */ ]]; then
+                _engulf_continues=0
+                break
+            fi
+        done
+        if (( _engulf_continues )); then
+            compopt -o nospace 2>/dev/null || true
+        elif (( ${{#_engulf_extra[@]}} )); then
+            compopt +o nospace 2>/dev/null || true
+        fi
+    fi
 }}
 
 complete -F {function_name} {command_literal}
 """
 
 
-def _render_zsh(wrapper_command: str, binary_service: str) -> str:
+def _render_zsh(
+    wrapper_command: str,
+    binary_service: str,
+    completion_source: str | None,
+) -> str:
     suffix = _identifier_suffix(wrapper_command)
     helper_name = f"_engulf_complete_{suffix}"
+    source_marker = f"_engulf_source_attempted_{suffix}"
     wrapper_literal = shlex.quote(wrapper_command)
     binary_literal = shlex.quote(binary_service)
+    source_literal = shlex.quote(completion_source or "")
     command_literal = shlex.quote(wrapper_command)
     return f"""#compdef {command_literal}
 # Generated by engulf-completion. Load with compinit or source after compinit.
+(( $+parameters[{source_marker}] )) || typeset -g {source_marker}=0
 {helper_name}() {{
     local _engulf_wrapper={wrapper_literal}
     local _engulf_binary={binary_literal}
+    local _engulf_completion_source={source_literal}
     local _engulf_arg_index=$((CURRENT - 2))
     local -a _engulf_args
     _engulf_args=("${{(@)words[2,-1]}}")
@@ -378,8 +539,31 @@ def _render_zsh(wrapper_command: str, binary_service: str) -> str:
     if (( $+_comps )); then
         _engulf_base_function=${{_comps[$_engulf_binary]-}}
     fi
+    local _engulf_has_native=0
     if [[ -n $_engulf_base_function && $_engulf_base_function != {helper_name} ]]; then
-        (( $+functions[$_engulf_base_function] )) || autoload -Uz "$_engulf_base_function"
+        (( $+functions[$_engulf_base_function] )) \
+            || autoload -Uz "$_engulf_base_function" 2>/dev/null || true
+        (( $+functions[$_engulf_base_function] )) && _engulf_has_native=1
+    fi
+    if (( ! _engulf_has_native && ! {source_marker} )) \
+            && [[ -n $_engulf_completion_source ]] \
+            && command -v "$_engulf_completion_source" >/dev/null 2>&1; then
+        {source_marker}=1
+        source <(
+            command "$_engulf_completion_source" completion zsh 2>/dev/null
+        ) >/dev/null 2>&1 || true
+        _engulf_base_function=""
+        if (( $+_comps )); then
+            _engulf_base_function=${{_comps[$_engulf_binary]-}}
+        fi
+        if [[ -n $_engulf_base_function && $_engulf_base_function != {helper_name} ]]; then
+            (( $+functions[$_engulf_base_function] )) \
+                || autoload -Uz "$_engulf_base_function" 2>/dev/null || true
+            (( $+functions[$_engulf_base_function] )) && _engulf_has_native=1
+        fi
+    fi
+    (( _engulf_has_native )) && _engulf_native=1
+    if (( _engulf_has_native && _engulf_normalized_index >= 0 )); then
         local -a _engulf_saved_words=("${{words[@]}}")
         local _engulf_saved_current=$CURRENT
         local _engulf_saved_service=${{service-}}
@@ -390,7 +574,6 @@ def _render_zsh(wrapper_command: str, binary_service: str) -> str:
         words=("${{_engulf_saved_words[@]}}")
         CURRENT=$_engulf_saved_current
         service=$_engulf_saved_service
-        _engulf_native=1
     fi
 
     local -a _engulf_extra
@@ -412,6 +595,86 @@ if [[ -n ${{CURRENT-}} ]] && (( ${{#words}} )); then
 elif (( $+functions[compdef] )); then
     compdef {helper_name} {command_literal}
 fi
+"""
+
+
+def _render_fish(
+    wrapper_command: str,
+    binary_service: str,
+    completion_source: str | None,
+) -> str:
+    suffix = _identifier_suffix(wrapper_command)
+    helper_name = f"__engulf_complete_{suffix}"
+    source_marker = f"__engulf_source_attempted_{suffix}"
+    wrapper_literal = shlex.quote(wrapper_command)
+    binary_literal = shlex.quote(binary_service)
+    source_literal = shlex.quote(completion_source or "")
+    command_literal = shlex.quote(wrapper_command)
+    return f"""# Generated by engulf-completion for fish.
+set -g {source_marker} 0
+function {helper_name}
+    set -l _engulf_wrapper {wrapper_literal}
+    set -l _engulf_binary {binary_literal}
+    set -l _engulf_completion_source {source_literal}
+    set -l _engulf_tokens (commandline -opc)
+    set -l _engulf_args $_engulf_tokens[2..-1]
+    set -l _engulf_current (commandline -ct)
+    if test (count $_engulf_current) -gt 0
+        set -a _engulf_args $_engulf_current
+    else
+        set -a _engulf_args ''
+    end
+    set -l _engulf_arg_index (math (count $_engulf_args) - 1)
+
+    set -l _engulf_normalized (command env ENGULF_INTERNAL_PROTOCOL=1 \
+        ENGULF_INTERNAL_ACTION=normalize ENGULF_INTERNAL_SHELL=fish \
+        ENGULF_INTERNAL_CWORD=$_engulf_arg_index \
+        ENGULF_INTERNAL_WRAPPER_COMMAND=$_engulf_wrapper \
+        $_engulf_wrapper $_engulf_args 2>/dev/null | string split0)
+    set -l _engulf_normalized_index $_engulf_arg_index
+    if test (count $_engulf_normalized) -gt 0
+        set _engulf_normalized_index $_engulf_normalized[1]
+        set -e _engulf_normalized[1]
+    else
+        set _engulf_normalized $_engulf_args
+    end
+
+    set -l _engulf_native 0
+    set -l _engulf_native_replies
+    if type -q $_engulf_binary
+        set -l _engulf_line (string join ' ' (string escape -- $_engulf_binary $_engulf_normalized))
+        if test $_engulf_normalized_index -ge 0
+            set _engulf_native_replies (complete -C "$_engulf_line" 2>/dev/null)
+        end
+        set -l _engulf_native_spec (complete -c $_engulf_binary 2>/dev/null)
+        if test (count $_engulf_native_spec) -eq 0; \
+                and test ${source_marker} -eq 0; \
+                and test -n "$_engulf_completion_source"; \
+                and type -q $_engulf_completion_source
+            set -g {source_marker} 1
+            command $_engulf_completion_source completion fish 2>/dev/null \
+                | source 2>/dev/null
+            set _engulf_native_spec (complete -c $_engulf_binary 2>/dev/null)
+            if test $_engulf_normalized_index -ge 0
+                set _engulf_native_replies (complete -C "$_engulf_line" 2>/dev/null)
+            end
+        end
+        if test (count $_engulf_native_spec) -gt 0
+            set _engulf_native 1
+        end
+    end
+
+    if test (count $_engulf_native_replies) -gt 0
+        printf '%s\\n' $_engulf_native_replies
+    end
+    command env ENGULF_INTERNAL_PROTOCOL=1 ENGULF_INTERNAL_ACTION=complete \
+        ENGULF_INTERNAL_SHELL=fish ENGULF_INTERNAL_CWORD=$_engulf_arg_index \
+        ENGULF_INTERNAL_NATIVE=$_engulf_native \
+        ENGULF_INTERNAL_WRAPPER_COMMAND=$_engulf_wrapper \
+        $_engulf_wrapper $_engulf_args 2>/dev/null | string split0
+end
+
+complete -c {command_literal} -f -a '({helper_name})'
 """
 
 

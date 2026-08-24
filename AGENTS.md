@@ -222,8 +222,16 @@ temporary wrapper-PID signals to the child and restore inherited handlers before
 postprocessing. Preserve exits 127, 126, `128 + signal`, and framework 70.
 
 Completion and help belong to the executable-wrapper goal packages, not core.
-Argument registration is completion metadata only; runtime edits come from returned
-`CallContribution` values.
+Argument registration is completion metadata unless an option explicitly binds an
+`environment` fallback. The goal consumes those options before outer callbacks and
+overlays their values on the immutable invocation environment. All other runtime
+argument edits come from returned `CallContribution` values.
+
+Native completion sourcing must remain an explicit application opt-in and may only
+execute a trusted wrapped executable's documented `completion <shell>` command.
+Prefer an already registered native completer, do not mistake Bash `_minimal` for
+one, and preserve the empty current word as a trailing space when rebuilding Bash
+completion context.
 
 ## Context, State, And Locks
 

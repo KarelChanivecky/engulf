@@ -60,6 +60,7 @@ class AuditPlugin(ExecutableWrapperPlugin):
             "--audit-label",
             takes_value=True,
             description="Attach an audit label",
+            environment="AUDIT_LABEL",
         )
         api.logger.debug(
             "registered audit metadata for %s %s",
@@ -118,6 +119,31 @@ class AuditPlugin(ExecutableWrapperPlugin):
 plugin = AuditPlugin()
 ```
 
+`ArgumentRegistry.option()` has this complete signature:
+
+```python
+option(
+    *names: str,
+    takes_value: bool = False,
+    metavar: str | None = None,
+    description: str | None = None,
+    value_completer: CompletionCallable | CompletionProvider | None = None,
+    visible_to_binary_completion: bool = False,
+    suggest_assignment: bool = True,
+    repeatable: bool = False,
+    when: CompletionPredicate | None = None,
+    environment: str | None = None,
+) -> OptionSpec
+```
+
+Most registrations are completion metadata only. When `environment` names an exact
+shell-style variable, the executable-wrapper goal also consumes that option before
+outer `before_goal` callbacks and places its value in the immutable invocation
+environment. Command-line values take precedence over inherited environment values;
+a value-taking option must have one value, and a non-repeatable option may occur only
+once. A switch writes `"1"`. Arguments at and after `--` are never consumed.
+`when` controls only whether the option is offered as a completion candidate.
+
 `ExecutableWrapperPlugin` supplies the correct `GoalRequirement`; subclasses do not
 repeat the goal ID or major.
 
@@ -129,9 +155,9 @@ removed arguments never leak back into another analyzer.
 
 | Event | Fields and timing |
 | --- | --- |
-| `BeforeCallEvent` | `binary`, original `wrapper_args`, and `mode`; sent to every analyzer. |
-| `PreparedCallEvent` | `binary`, original `wrapper_args`, merged `effective_args`, and `mode`; sent only for viable normal execution. |
-| `AfterCallEvent` | Both argument tuples, mode, final `CallOutcome`, and monotonic `duration_seconds`; sent after preemption or an execution attempt. |
+| `BeforeCallEvent` | `binary`, original `wrapper_args`, `mode`, and normalized `environment`; sent to every analyzer. |
+| `PreparedCallEvent` | `binary`, original `wrapper_args`, merged `effective_args`, `mode`, and normalized `environment`; sent only for viable normal execution. |
+| `AfterCallEvent` | Both argument tuples, mode, final `CallOutcome`, monotonic `duration_seconds`, and normalized `environment`; sent after preemption or an execution attempt. |
 
 `CallMode.NORMAL` is ordinary execution. `CallMode.HELP` is selected only by an
 exact `--help` argument. Help-like values such as `--help=topic` remain normal.
@@ -281,9 +307,10 @@ type and declares that goal's requirement. Do not use wildcard goal compatibilit
 ## Completion Metadata
 
 `register_arguments()` and `register_completions()` run once during goal setup with
-initialized loggers. Argument declarations affect wrapper completion only; they do
-not parse, validate, consume, or automatically remove runtime arguments. Runtime
-argument behavior comes exclusively from returned `CallContribution` values.
+initialized loggers. Argument declarations normally affect wrapper completion only.
+An option with `environment` is the narrow exception: the goal consumes it and
+overlays the invocation environment before outer callbacks. Other runtime argument
+behavior comes exclusively from returned `CallContribution` values.
 
 Register option metadata with every spelling in one call:
 
@@ -298,6 +325,8 @@ def register_arguments(self, registry, api) -> None:
         value_completer=lambda context: ["dev", "staging", "production"],
         visible_to_binary_completion=False,
         repeatable=False,
+        when=lambda context: "deploy" in context.words,
+        environment="EXAMPLE_PROFILE",
     )
 ```
 
@@ -305,12 +334,17 @@ def register_arguments(self, registry, api) -> None:
 `-` and must not collide with any earlier registration. A `value_completer` requires
 `takes_value=True`. Before `--`, an option hidden from binary completion also hides
 its separate value; set `visible_to_binary_completion=True` only when the wrapped
-executable's native completer should see it. `repeatable=False` suppresses an option
-candidate after any spelling has already appeared. These flags still have no
-runtime parsing effect.
+executable's native completer should see it. Long value-taking options are suggested
+with a trailing `=` by default. Set `suggest_assignment=False` to suggest the bare
+option followed by a separate shell word; manually entered `--option=value` syntax
+remains supported. `repeatable=False` suppresses an option candidate after any
+spelling has already appeared. `when` gates only completion. `environment` must be
+an exact shell-style variable name and enables the normalization semantics described
+above.
 
 The resulting fields are `names`, `takes_value`, `metavar`, `description`,
-`value_completer`, `visible_to_binary_completion`, and `repeatable`.
+`value_completer`, `visible_to_binary_completion`, `suggest_assignment`,
+`repeatable`, `when`, and `environment`.
 
 `ArgumentRegistry.options` returns registrations in insertion order.
 `find_exact(word)` and `find_assignment(word)` are available to goal/completion

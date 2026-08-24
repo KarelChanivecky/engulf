@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
+from types import MappingProxyType
 
 from engulf_api import validate_exit_code
 
@@ -45,6 +47,10 @@ class BeforeCallEvent:
     binary: str
     wrapper_args: tuple[str, ...]
     mode: CallMode
+    environment: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "environment", _environment(self.environment))
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +59,10 @@ class PreparedCallEvent:
     wrapper_args: tuple[str, ...]
     effective_args: tuple[str, ...]
     mode: CallMode
+    environment: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "environment", _environment(self.environment))
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +73,23 @@ class AfterCallEvent:
     mode: CallMode
     outcome: CallOutcome
     duration_seconds: float
+    environment: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "environment", _environment(self.environment))
+
+
+def _environment(value: Mapping[str, str]) -> Mapping[str, str]:
+    try:
+        environment = dict(value)
+    except (TypeError, ValueError) as error:
+        raise TypeError("environment must be a string mapping") from error
+    if any(
+        not isinstance(key, str) or not isinstance(item, str)
+        for key, item in environment.items()
+    ):
+        raise TypeError("environment must contain only string keys and values")
+    return MappingProxyType(environment)
 
 
 @dataclass(frozen=True, slots=True)

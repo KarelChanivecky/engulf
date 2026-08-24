@@ -63,13 +63,26 @@ def main(argv: list[str] | None = None) -> int:
             raise TypeError("completion_service must be a string")
         if not binary_service or "\0" in binary_service:
             raise ValueError("completion_service must be nonempty and contain no NUL")
+        completion_source = description.get("completion_source")
+        if completion_source is not None:
+            if not isinstance(completion_source, str):
+                raise TypeError("completion_source must be a string or null")
+            if not completion_source or "\0" in completion_source:
+                raise ValueError(
+                    "completion_source must be nonempty and contain no NUL"
+                )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         print(
             f"engulf-completion: invalid wrapper description: {error}", file=sys.stderr
         )
         return 1
 
-    script = render_completion_script(Shell(args.shell), args.wrapper, binary_service)
+    script = render_completion_script(
+        Shell(args.shell),
+        args.wrapper,
+        binary_service,
+        completion_source=completion_source,
+    )
     if args.output is None:
         sys.stdout.write(script)
     else:
