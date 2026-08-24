@@ -79,8 +79,10 @@ Diagnostic extensions are a separate, automatically discovered extension kind.
 Their targets are never imported by the application process. On Linux, an exact
 reserved trigger runs each matching target in its own bounded Bubblewrap sandbox,
 using a length-limited JSON protocol. The sandbox has no workspace, home, host
-temporary directory, or network view. If that isolation cannot be established,
-Engulf leaves diagnostics disabled and safely rejects their declared triggers.
+temporary directory, or network view. Discovery and ordinary invocations do not
+start Bubblewrap; isolation is first tested after a diagnostic trigger matches. If
+that isolation cannot be established, Engulf leaves diagnostics disabled and safely
+rejects their declared triggers.
 This boundary does not make normal goal plugins safer: those remain trusted,
 in-process code with the application's full authority.
 

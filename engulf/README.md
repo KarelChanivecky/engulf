@@ -182,7 +182,7 @@ Useful inspection properties are immutable snapshots:
 | `plugin_policy`, `required_plugin_ids`, `missing_policy_ids` | Effective selection and optional IDs absent from the catalog. |
 | `active_plugins`, `plugins` | Normal plugins in preprocessing order. |
 | `postprocess_plugins` | The same descriptors in postprocessing order. |
-| `diagnostic_extensions` | Import-free diagnostic descriptors, including availability. |
+| `diagnostic_extensions` | Import-free diagnostic descriptors; availability is `None` until isolation is first requested. |
 | `goal_plugin_entry_point_group` | Exact compatible normal-plugin catalog. |
 | `application_plugin_entry_point_group` | Current application's declaration group. |
 | `application_plugin_entry_point_groups` | Current and inherited declaration groups in lookup order. |
@@ -231,11 +231,13 @@ filter. Communication is bounded JSON, never pickle. A matching diagnostic
 invocation suppresses every invocation-time normal hook, goal phase, goal action,
 and wrapped executable. Goal setup still runs once during application construction.
 
+Discovery and ordinary invocations never start Bubblewrap. The first matching
+diagnostic invocation probes isolation and caches the result for that `Application`.
 If Bubblewrap or required kernel isolation is unavailable, diagnostic targets stay
-unimported. Engulf emits one construction warning, continues ordinary invocations,
-and returns framework exit 70 for a declared diagnostic trigger rather than passing
-it through to the goal. Kernel vulnerabilities and side channels are outside this
-boundary; normal plugins remain fully trusted in-process code.
+unimported. Engulf warns when the matching trigger first tests isolation and returns
+framework exit 70 rather than passing the trigger through to the goal. Kernel
+vulnerabilities and side channels are outside this boundary; normal plugins remain
+fully trusted in-process code.
 
 ### Authoring A Diagnostic Extension
 
@@ -305,7 +307,8 @@ The isolated callback receives:
   source records in preprocessing order;
 - `api.plugin_executions`, adding one-based preprocessing and postprocessing
   positions;
-- every import-free `api.diagnostic_extensions` descriptor and its availability;
+- every import-free `api.diagnostic_extensions` descriptor and the cached isolation
+  availability established before the worker started;
 - the application's `api.elevated` snapshot and a buffered `api.logger`.
 
 It receives no current directory, environment, host home, workspace, context,
@@ -327,9 +330,11 @@ is a complete implementation of this pattern.
 
 Diagnostics require Linux, `unshare`, Bubblewrap with `--ro-bind-fd` support,
 libseccomp, and usable user/network/cgroup namespace isolation. Availability is
-probed before any target import. A missing tool, unsupported Bubblewrap build,
-blocked namespace operation, failed seccomp setup, or failed read-only mount keeps
-the extension unavailable.
+initially untested and represented by `DiagnosticExtension.available is None`.
+After a diagnostic trigger matches, availability is probed before any target import
+and cached as `True` or `False` for that `Application`. A missing tool, unsupported
+Bubblewrap build, blocked namespace operation, failed seccomp setup, or failed
+read-only mount keeps the extension unavailable.
 
 Each worker receives read-only views of the Python/runtime files required to import
 its distribution, a private process and network namespace, a minimal `/dev` and
@@ -385,6 +390,14 @@ Installed discovery reads entry-point identity and distribution metadata before
 importing plugin modules. Plugin-declared ordering, context, dependency, and
 elevation metadata is snapshotted as `PluginMetadata` after import. A plugin package
 can publish two kinds of declaration.
+
+Each fresh `Application` with installed discovery enabled takes one shared
+`importlib.metadata.entry_points()` snapshot for the goal catalog, every current or
+inherited application declaration group, the diagnostic catalog, and diagnostic
+triggers. The internal index selects those groups in memory and caches distribution
+name, normalized name, and version once per relevant distribution. The index is not
+global: a later `Application` takes a fresh snapshot, while
+`discover_installed=False` takes none.
 
 ### Goal Catalog
 

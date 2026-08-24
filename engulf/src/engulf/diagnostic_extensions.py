@@ -8,8 +8,8 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
-from importlib.metadata import EntryPoint, entry_points
+from dataclasses import asdict, dataclass, replace
+from importlib.metadata import EntryPoint
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,7 @@ from engulf_api import (
 )
 
 from .plugin_info import _normalize_distribution_name
-from .plugin_loader import PluginLoadError
+from .plugin_loader import EntryPointIndex, PluginLoadError
 
 DIAGNOSTIC_API_MAJOR = 1
 
@@ -68,12 +68,33 @@ class _DiscoveredDiagnostic:
 @dataclass(frozen=True, slots=True)
 class DiagnosticDiscovery:
     diagnostics: tuple[_DiscoveredDiagnostic, ...]
-    isolation_available: bool
+    isolation_available: bool | None
     unavailable_reason: str | None
 
     @property
     def descriptors(self) -> tuple[DiagnosticExtension, ...]:
         return tuple(item.descriptor for item in self.diagnostics)
+
+    def with_isolation_availability(
+        self,
+        available: bool,
+        unavailable_reason: str | None,
+    ) -> DiagnosticDiscovery:
+        if type(available) is not bool:
+            raise TypeError("diagnostic isolation availability must be a boolean")
+        reason = None if available else unavailable_reason or "unknown reason"
+        diagnostics = tuple(
+            _DiscoveredDiagnostic(
+                replace(
+                    item.descriptor,
+                    available=available,
+                    unavailable_reason=reason,
+                ),
+                item.entry_point,
+            )
+            for item in self.diagnostics
+        )
+        return DiagnosticDiscovery(diagnostics, available, reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,22 +131,24 @@ def diagnostic_trigger_entry_point_group(goal_id: str, goal_api_major: int) -> s
 
 def discover_diagnostics(
     requirement: GoalRequirement,
-    config: DiagnosticIsolationConfig,
     *,
     discover_installed: bool,
+    entry_point_index: EntryPointIndex | None = None,
 ) -> DiagnosticDiscovery:
     if not discover_installed:
-        return DiagnosticDiscovery((), False, "installed discovery is disabled")
+        return DiagnosticDiscovery((), None, None)
     catalog_group = diagnostic_entry_point_group(
         requirement.goal_id, requirement.api_major
     )
     trigger_group = diagnostic_trigger_entry_point_group(
         requirement.goal_id, requirement.api_major
     )
-    catalog = _catalog(catalog_group, identifiers=True)
-    triggers = _catalog(trigger_group, identifiers=False)
+    if entry_point_index is None:
+        entry_point_index = EntryPointIndex.discover((catalog_group, trigger_group))
+    catalog = _catalog(catalog_group, entry_point_index, identifiers=True)
+    triggers = _catalog(trigger_group, entry_point_index, identifiers=False)
     if not catalog and not triggers:
-        return DiagnosticDiscovery((), False, None)
+        return DiagnosticDiscovery((), None, None)
 
     triggers_by_source: dict[tuple[str, str, str], list[str]] = {}
     seen_triggers: set[str] = set()
@@ -134,13 +157,15 @@ def discover_diagnostics(
         if trigger in seen_triggers:
             raise PluginLoadError(f"duplicate diagnostic trigger {trigger!r}")
         seen_triggers.add(trigger)
-        triggers_by_source.setdefault(_source_key(declaration), []).append(trigger)
+        triggers_by_source.setdefault(
+            _source_key(declaration, entry_point_index),
+            [],
+        ).append(trigger)
 
-    available, reason = _isolation_available(config, next(iter(catalog.values())))
     discovered: list[_DiscoveredDiagnostic] = []
     catalog_sources: set[tuple[str, str, str]] = set()
     for diagnostic_id, declaration in catalog.items():
-        source = _source_key(declaration)
+        source = _source_key(declaration, entry_point_index)
         catalog_sources.add(source)
         descriptor = DiagnosticExtension(
             diagnostic_id=diagnostic_id,
@@ -148,8 +173,6 @@ def discover_diagnostics(
             distribution=source[0],
             version=source[1],
             target=declaration.value,
-            available=available,
-            unavailable_reason=None if available else reason,
         )
         discovered.append(_DiscoveredDiagnostic(descriptor, declaration))
     unmatched = set(triggers_by_source) - catalog_sources
@@ -163,7 +186,7 @@ def discover_diagnostics(
             item.descriptor.diagnostic_id,
         )
     )
-    return DiagnosticDiscovery(tuple(discovered), available, reason)
+    return DiagnosticDiscovery(tuple(discovered), None, None)
 
 
 def matching_diagnostics(
@@ -183,6 +206,12 @@ def matching_diagnostics(
 class BubblewrapDiagnosticRunner:
     def __init__(self, config: DiagnosticIsolationConfig) -> None:
         self._config = config
+
+    def probe(
+        self,
+        diagnostic: _DiscoveredDiagnostic,
+    ) -> tuple[bool, str | None]:
+        return _isolation_available(self._config, diagnostic.entry_point)
 
     def run(
         self,
@@ -225,15 +254,14 @@ class BubblewrapDiagnosticRunner:
         return _decode_response(completed.stdout, limit=limit)
 
 
-def _catalog(group: str, *, identifiers: bool) -> dict[str, EntryPoint]:
-    try:
-        entries = entry_points(group=group)
-    except Exception as error:
-        raise PluginLoadError(
-            f"failed to discover diagnostics in entry-point group {group!r}"
-        ) from error
+def _catalog(
+    group: str,
+    entry_point_index: EntryPointIndex,
+    *,
+    identifiers: bool,
+) -> dict[str, EntryPoint]:
     result: dict[str, EntryPoint] = {}
-    for item in entries:
+    for item in entry_point_index.entries(group):
         name = item.name
         if identifiers:
             try:
@@ -259,11 +287,16 @@ def _validate_trigger(trigger: str) -> None:
         )
 
 
-def _source_key(entry_point: EntryPoint) -> tuple[str, str, str]:
-    distribution = entry_point.dist
-    name = "unknown-distribution" if distribution is None else distribution.name
-    version = "unknown" if distribution is None else distribution.version
-    return name or "unknown-distribution", version or "unknown", entry_point.value
+def _source_key(
+    entry_point: EntryPoint,
+    entry_point_index: EntryPointIndex,
+) -> tuple[str, str, str]:
+    distribution = entry_point_index.distribution_identity(entry_point)
+    return (
+        distribution.name or "unknown-distribution",
+        distribution.version or "unknown",
+        entry_point.value,
+    )
 
 
 def _isolation_available(

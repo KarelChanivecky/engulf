@@ -32,9 +32,22 @@ from engulf import Application
 
 
 class _Runner:
-    def __init__(self, *, fail_id: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        available: bool = True,
+        fail_id: str | None = None,
+    ) -> None:
+        self.available = available
         self.fail_id = fail_id
+        self.probe_calls: list[str] = []
         self.calls: list[str] = []
+
+    def probe(self, diagnostic) -> tuple[bool, str | None]:
+        self.probe_calls.append(diagnostic.descriptor.diagnostic_id)
+        if self.available:
+            return True, None
+        return False, "test unavailable"
 
     def run(
         self,
@@ -69,12 +82,13 @@ class DiagnosticExtensionTestCase(unittest.TestCase):
                 "distribution": "tests-diagnostic",
                 "version": "1",
                 "target": "tests_diagnostic:plugin",
-                "available": True,
+                "available": None,
                 "unavailable_reason": None,
             }
         )
 
         self.assertEqual(extension.triggers, ("--diagnose",))
+        self.assertIsNone(extension.available)
 
     def test_bubblewrap_mounts_dynamic_loader_paths_for_python(self) -> None:
         entry_point = EntryPoint(
@@ -256,7 +270,7 @@ class DiagnosticExtensionTestCase(unittest.TestCase):
         self.assertEqual(reason, "Bubblewrap lacks required fd mounts")
         run_bounded.assert_not_called()
 
-    def make_application(self, *, available: bool = True) -> Application:
+    def make_application(self) -> Application:
         catalog_group = diagnostic_entry_point_group(
             TEST_GOAL_REQUIREMENT.goal_id, TEST_GOAL_REQUIREMENT.api_major
         )
@@ -282,18 +296,21 @@ class DiagnosticExtensionTestCase(unittest.TestCase):
             ),
         }
 
-        def discover(*, group: str):
-            return entries.get(group, ())
+        def discover():
+            return tuple(
+                entry_point
+                for group_entries in entries.values()
+                for entry_point in group_entries
+            )
 
-        availability = (True, None) if available else (False, "test unavailable")
         with (
-            patch("engulf.diagnostic_extensions.entry_points", side_effect=discover),
             patch(
-                "engulf.diagnostic_extensions._isolation_available",
-                return_value=availability,
-            ),
+                "engulf.plugin_loader.entry_points",
+                side_effect=discover,
+            ) as snapshot,
+            patch("engulf.diagnostic_extensions._isolation_available") as probe,
         ):
-            return Application(
+            application = Application(
                 "tests.diagnostic.app",
                 PassGoal(),
                 display_name="diagnostic-app",
@@ -303,6 +320,20 @@ class DiagnosticExtensionTestCase(unittest.TestCase):
                 version="1",
                 discover_installed=True,
             )
+        snapshot.assert_called_once_with()
+        probe.assert_not_called()
+        return application
+
+    def test_construction_and_normal_invocation_do_not_probe_isolation(self) -> None:
+        application = self.make_application()
+        runner = _Runner()
+        application._diagnostic_runner = runner  # type: ignore[attr-defined]
+        self.assertTrue(
+            all(item.available is None for item in application.diagnostic_extensions)
+        )
+        self.assertEqual(application.invoke(("normal",)).value, ("normal",))
+        self.assertEqual(runner.probe_calls, [])
+        application.close()
 
     def test_matching_diagnostics_suppress_goal_and_aggregate_in_order(self) -> None:
         application = self.make_application()
@@ -318,9 +349,16 @@ class DiagnosticExtensionTestCase(unittest.TestCase):
             result.diagnostic_ids,
             ("tests.diagnostic.alpha", "tests.diagnostic.beta"),
         )
+        self.assertEqual(runner.probe_calls, ["tests.diagnostic.alpha"])
         self.assertEqual(runner.calls, list(result.diagnostic_ids))
+        self.assertTrue(
+            all(item.available is True for item in application.diagnostic_extensions)
+        )
         self.assertNotIn("never_import_alpha", __import__("sys").modules)
-        self.assertEqual(application.invoke(("normal",)).value, ("normal",))
+
+        with patch("sys.stdout", io.StringIO()):
+            application.invoke(("--diagnose-alpha",))
+        self.assertEqual(runner.probe_calls, ["tests.diagnostic.alpha"])
         application.close()
 
     def test_worker_failure_does_not_stop_later_diagnostics(self) -> None:
@@ -338,13 +376,31 @@ class DiagnosticExtensionTestCase(unittest.TestCase):
     def test_trigger_after_separator_is_normal_and_disabled_trigger_is_rejected(
         self,
     ) -> None:
-        application = self.make_application(available=False)
+        application = self.make_application()
+        runner = _Runner(available=False)
+        application._diagnostic_runner = runner  # type: ignore[attr-defined]
         after_separator = application.invoke(("--", "--diagnose-alpha"))
+        self.assertEqual(runner.probe_calls, [])
         rejected = application.invoke(("--diagnose-alpha",))
         self.assertIs(after_separator.status, GoalResultStatus.COMPLETED)
         self.assertEqual(after_separator.value, ("--", "--diagnose-alpha"))
         self.assertIs(rejected.status, GoalResultStatus.FRAMEWORK_FAILED)
         self.assertEqual(rejected.exit_code, 70)
+        self.assertEqual(runner.probe_calls, ["tests.diagnostic.alpha"])
+        self.assertEqual(runner.calls, [])
+        rejected_again = application.invoke(("--diagnose-beta",))
+        self.assertIs(rejected_again.status, GoalResultStatus.FRAMEWORK_FAILED)
+        self.assertEqual(runner.probe_calls, ["tests.diagnostic.alpha"])
+        self.assertEqual(runner.calls, [])
+        self.assertTrue(
+            all(item.available is False for item in application.diagnostic_extensions)
+        )
+        self.assertTrue(
+            all(
+                item.unavailable_reason == "test unavailable"
+                for item in application.diagnostic_extensions
+            )
+        )
         application.close()
 
 

@@ -61,6 +61,7 @@ from .plugin_api import (
 )
 from .plugin_info import ActivePlugin
 from .plugin_loader import (
+    EntryPointIndex,
     PluginPolicy,
     PluginRequirementError,
     application_plugin_entry_point_group,
@@ -178,6 +179,29 @@ class Application[ResultT]:
             contract,
             source=f"plugin directory {self._plugin_directory}",
         )
+        entry_point_index: EntryPointIndex | None = None
+        if discover_installed:
+            declaration_entry_point_groups = tuple(
+                application_plugin_entry_point_group(application_id)
+                for application_id in self._plugin_declaration_application_ids
+            )
+            entry_point_index = EntryPointIndex.discover(
+                (
+                    goal_plugin_entry_point_group(
+                        contract.goal_id,
+                        contract.api_major,
+                    ),
+                    *declaration_entry_point_groups,
+                    diagnostic_entry_point_group(
+                        contract.goal_id,
+                        contract.api_major,
+                    ),
+                    diagnostic_trigger_entry_point_group(
+                        contract.goal_id,
+                        contract.api_major,
+                    ),
+                )
+            )
         discovery = discover_plugins(
             self._application_id,
             contract,
@@ -188,6 +212,7 @@ class Application[ResultT]:
                 self._plugin_declaration_application_ids
             ),
             discover_installed=discover_installed,
+            entry_point_index=entry_point_index,
         )
 
         try:
@@ -218,8 +243,8 @@ class Application[ResultT]:
         try:
             self._diagnostic_discovery = discover_diagnostics(
                 contract.requirement,
-                isolation_config,
                 discover_installed=discover_installed,
+                entry_point_index=entry_point_index,
             )
         except BaseException as diagnostic_discovery_error:
             try:
@@ -542,15 +567,6 @@ class Application[ResultT]:
 
     def _setup_goal(self) -> None:
         with self._diagnostics.session() as diagnostics:
-            if (
-                self._diagnostic_discovery.diagnostics
-                and not self._diagnostic_discovery.isolation_available
-            ):
-                diagnostics.core.warning(
-                    "isolated diagnostics are unavailable: %s",
-                    self._diagnostic_discovery.unavailable_reason,
-                    extra={"engulf_phase": "diagnostic.discovery"},
-                )
             for plugin_id in self._missing_policy_ids:
                 diagnostics.core.debug(
                     "optional plugin %s is not installed for goal %s v%d",
@@ -609,11 +625,33 @@ class Application[ResultT]:
         matches: tuple[_DiscoveredDiagnostic, ...],
         diagnostics: DiagnosticsSession,
     ) -> GoalResult[ResultT]:
+        probe_error: Exception | None = None
+        if self._diagnostic_discovery.isolation_available is None:
+            try:
+                available, reason = self._diagnostic_runner.probe(matches[0])
+            except Exception as error:  # noqa: BLE001 - isolation boundary.
+                probe_error = error
+                available = False
+                reason = f"isolation probe failed: {error}"
+            self._diagnostic_discovery = (
+                self._diagnostic_discovery.with_isolation_availability(
+                    available,
+                    reason,
+                )
+            )
+            matches = matching_diagnostics(self._diagnostic_discovery, arguments)
+            if not available:
+                diagnostics.core.warning(
+                    "isolated diagnostics are unavailable: %s",
+                    self._diagnostic_discovery.unavailable_reason,
+                    extra={"engulf_phase": "diagnostic.isolation"},
+                )
         if not self._diagnostic_discovery.isolation_available:
             reason = self._diagnostic_discovery.unavailable_reason or "unknown reason"
             diagnostics.failure(
                 f"diagnostic trigger rejected because isolation is unavailable: {reason}",
                 phase="diagnostic.isolation",
+                error=probe_error,
             )
             return GoalResult.framework_failed(error="diagnostic isolation unavailable")
         request = DiagnosticRequest(

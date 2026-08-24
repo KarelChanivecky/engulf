@@ -22,7 +22,9 @@ The report has two tables. “Normal goal plugins” shows each selected plugin'
 one-based preprocessing and postprocessing positions, priority, elevation
 requirement, stable ID, and observed source. “Diagnostic extensions” shows every
 discovered diagnostic ID, triggers, distribution, version, and isolation
-availability. Empty tables explicitly contain `(none)`.
+availability. Availability is lazily tested when a diagnostic trigger first
+matches; public application snapshots use `not checked` before that test. The report
+itself runs only after a successful test. Empty tables explicitly contain `(none)`.
 
 The trigger matches only as an exact argument before the first `--`. These remain
 ordinary wrapped-command arguments:
@@ -33,9 +35,10 @@ my-wrapper --engulf-plugin-list=value
 ```
 
 When the diagnostic matches, normal invocation hooks, wrapper phases, and the child
-executable do not run. One-time wrapper goal setup has already completed. The report
-normally exits 0; if required Linux isolation is unavailable, Engulf keeps this
-module unimported and rejects the declared trigger with framework exit 70.
+executable do not run. One-time wrapper goal setup has already completed. Ordinary
+wrapper invocations do not start Bubblewrap merely because this package is installed.
+The report normally exits 0; if required Linux isolation is unavailable, Engulf
+keeps this module unimported and rejects the declared trigger with framework exit 70.
 
 The displayed source is observed provenance, not a trust verdict. Installed records
 include distribution/version and target, directory records include the canonical

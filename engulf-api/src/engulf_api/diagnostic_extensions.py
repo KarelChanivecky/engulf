@@ -46,14 +46,17 @@ class DiagnosticRequest:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DiagnosticExtension:
-    """Import-free discovery record for one isolated diagnostic extension."""
+    """Import-free discovery record for one isolated diagnostic extension.
+
+    ``available`` is ``None`` until the runtime first tests diagnostic isolation.
+    """
 
     diagnostic_id: str
     triggers: tuple[str, ...]
     distribution: str
     version: str
     target: str
-    available: bool
+    available: bool | None = None
     unavailable_reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -72,12 +75,16 @@ class DiagnosticExtension:
         ):
             if not isinstance(value, str) or not value:
                 raise ValueError(f"diagnostic {field} must be a nonempty string")
-        if type(self.available) is not bool:
-            raise TypeError("diagnostic available must be a boolean")
+        if self.available is not None and type(self.available) is not bool:
+            raise TypeError("diagnostic available must be a boolean or None")
         if self.unavailable_reason is not None and (
             not isinstance(self.unavailable_reason, str) or not self.unavailable_reason
         ):
             raise ValueError("unavailable_reason must be a nonempty string or None")
+        if self.available is not False and self.unavailable_reason is not None:
+            raise ValueError(
+                "unavailable_reason requires diagnostic available to be False"
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -292,7 +292,6 @@ class ApiTestCase(unittest.TestCase):
             distribution="tests-api-diagnostic",
             version="1",
             target="tests_diagnostic:plugin",
-            available=True,
         )
         contribution = DiagnosticContribution(stdout="ok\n", exit_code=9)
         result = GoalResult.diagnostic(
@@ -300,6 +299,7 @@ class ApiTestCase(unittest.TestCase):
         )
 
         self.assertEqual(request.arguments, ("--inspect",))
+        self.assertIsNone(extension.available)
         self.assertFalse(hasattr(request, "environment"))
         self.assertFalse(hasattr(request, "cwd"))
         self.assertIs(result.status, GoalResultStatus.DIAGNOSTIC)
@@ -314,6 +314,15 @@ class ApiTestCase(unittest.TestCase):
                 version="1",
                 target="module:value",
                 available=True,
+            )
+        with self.assertRaises(ValueError):
+            DiagnosticExtension(
+                diagnostic_id="tests.api.bad-availability",
+                triggers=("--inspect",),
+                distribution="tests",
+                version="1",
+                target="module:value",
+                unavailable_reason="not available",
             )
 
     def test_state_contract_is_public_and_abstract(self) -> None:

@@ -437,7 +437,9 @@ lease handles.
   preprocessing and postprocessing positions through `PluginExecutionRecord`;
 - `diagnostic_extensions` contains every import-free `DiagnosticExtension` record,
   including `diagnostic_id`, `triggers`, `distribution`, `version`, `target`,
-  `available`, and `unavailable_reason`;
+  `available`, and `unavailable_reason`. `available` is `None` before the runtime
+  first tests isolation, then `True` or `False`; `unavailable_reason` is populated
+  only for a failed test;
 - `elevated` is the host application's elevation snapshot;
 - `logger` buffers standard logging methods for the diagnostic response.
 

@@ -8,7 +8,11 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 from unittest.mock import patch
 
-from engulf.plugin_loader import load_directory_plugins, normalize_application_id
+from engulf.plugin_loader import (
+    EntryPointIndex,
+    load_directory_plugins,
+    normalize_application_id,
+)
 from engulf_api import (
     Goal,
     GoalAPI,
@@ -30,6 +34,8 @@ from engulf import (
     PluginRequirementError,
     PluginSourceKind,
     application_plugin_entry_point_group,
+    diagnostic_entry_point_group,
+    diagnostic_trigger_entry_point_group,
     goal_plugin_entry_point_group,
 )
 
@@ -65,6 +71,24 @@ class LoaderPlugin(Plugin):
         self.plugin_id = plugin_id
         self.priority = priority
         self.plugin_dependencies = dependencies
+
+
+class _CountingDistribution:
+    def __init__(self, name: str, version: str) -> None:
+        self._name = name
+        self._version = version
+        self.name_reads = 0
+        self.version_reads = 0
+
+    @property
+    def name(self) -> str:
+        self.name_reads += 1
+        return self._name
+
+    @property
+    def version(self) -> str:
+        self.version_reads += 1
+        return self._version
 
 
 class PluginLoaderTestCase(unittest.TestCase):
@@ -120,14 +144,21 @@ class PluginLoaderTestCase(unittest.TestCase):
     ) -> Application:
         mapping = {} if entries is None else entries
 
-        def discover(*, group: str):
-            return mapping.get(group, ())
+        def discover():
+            return tuple(
+                entry_point
+                for group_entries in mapping.values()
+                for entry_point in group_entries
+            )
 
         with (
-            patch("engulf.plugin_loader.entry_points", side_effect=discover),
+            patch(
+                "engulf.plugin_loader.entry_points",
+                side_effect=discover,
+            ) as snapshot,
             patch.object(sys, "path", [str(self.directory), *sys.path]),
         ):
-            return Application(
+            application = Application(
                 application_id,
                 LoaderGoal(),
                 display_name="loader-app",
@@ -141,6 +172,11 @@ class PluginLoaderTestCase(unittest.TestCase):
                 plugin_dir=plugin_dir,
                 discover_installed=discover_installed,
             )
+        if discover_installed:
+            snapshot.assert_called_once_with()
+        else:
+            snapshot.assert_not_called()
+        return application
 
     @staticmethod
     def catalog_entry(plugin_id: str, export: str) -> EntryPoint:
@@ -187,6 +223,117 @@ class PluginLoaderTestCase(unittest.TestCase):
             goal_plugin_entry_point_group("tests.loader.goal", 1),
             "engulf.plugins.v1.goal.v1.tests_loader_goal",
         )
+
+    def test_entry_point_index_snapshots_once_and_caches_distribution_metadata(
+        self,
+    ) -> None:
+        goal_group = goal_plugin_entry_point_group(
+            REQUIREMENT.goal_id,
+            REQUIREMENT.api_major,
+        )
+        application_group = application_plugin_entry_point_group("tests-index-app")
+        distribution = _CountingDistribution("Tests.Distribution", "1.2.3")
+        goal_entry = EntryPoint(
+            "tests.loader.alpha",
+            f"{self.module_name}:alpha",
+            goal_group,
+        )._for(distribution)
+        declaration = EntryPoint(
+            "tests.loader.alpha",
+            f"{self.module_name}:alpha",
+            application_group,
+        )._for(distribution)
+        unrelated_distribution = _CountingDistribution("Unrelated", "9")
+        unrelated = EntryPoint(
+            "tests.unrelated.plugin",
+            "unrelated:plugin",
+            "tests.unrelated.group",
+        )._for(unrelated_distribution)
+
+        with patch(
+            "engulf.plugin_loader.entry_points",
+            return_value=(goal_entry, declaration, unrelated),
+        ) as snapshot:
+            index = EntryPointIndex.discover((goal_group, application_group))
+
+        snapshot.assert_called_once_with()
+        self.assertEqual(index.entries(goal_group), (goal_entry,))
+        self.assertEqual(index.entries(application_group), (declaration,))
+        first_identity = index.distribution_identity(goal_entry)
+        self.assertIs(index.distribution_identity(goal_entry), first_identity)
+        self.assertIs(index.distribution_identity(declaration), first_identity)
+        self.assertEqual(first_identity.name, "Tests.Distribution")
+        self.assertEqual(first_identity.normalized_name, "tests-distribution")
+        self.assertEqual(first_identity.version, "1.2.3")
+        self.assertEqual(distribution.name_reads, 1)
+        self.assertEqual(distribution.version_reads, 1)
+        self.assertEqual(unrelated_distribution.name_reads, 0)
+        self.assertEqual(unrelated_distribution.version_reads, 0)
+
+    def test_application_shares_one_snapshot_across_all_entry_point_groups(
+        self,
+    ) -> None:
+        application_id = "tests-index-app"
+        catalog = self.catalog_entry("tests.loader.alpha", "alpha")
+        entries = self.entries_for(
+            application_id,
+            catalog=(catalog,),
+            declarations=(
+                self.application_entry(
+                    application_id,
+                    "tests.loader.alpha",
+                    "alpha",
+                ),
+            ),
+        )
+        diagnostic_group = diagnostic_entry_point_group(
+            REQUIREMENT.goal_id,
+            REQUIREMENT.api_major,
+        )
+        trigger_group = diagnostic_trigger_entry_point_group(
+            REQUIREMENT.goal_id,
+            REQUIREMENT.api_major,
+        )
+        entries[diagnostic_group] = (
+            EntryPoint(
+                "tests.diagnostic.inventory",
+                "never_import_inventory:diagnostic",
+                diagnostic_group,
+            ),
+        )
+        entries[trigger_group] = (
+            EntryPoint(
+                "--inventory",
+                "never_import_inventory:diagnostic",
+                trigger_group,
+            ),
+        )
+
+        application = self.make_application(
+            application_id=application_id,
+            entries=entries,
+        )
+
+        self.assertEqual(
+            tuple(plugin.plugin_id for plugin in application.plugins),
+            ("tests.loader.alpha",),
+        )
+        self.assertEqual(
+            tuple(
+                extension.diagnostic_id
+                for extension in application.diagnostic_extensions
+            ),
+            ("tests.diagnostic.inventory",),
+        )
+        self.assertNotIn("never_import_inventory", sys.modules)
+        application.close()
+
+    def test_disabled_installed_discovery_does_not_take_a_snapshot(self) -> None:
+        application = self.make_application(discover_installed=False)
+
+        self.assertEqual(application.plugins, ())
+        self.assertEqual(application.diagnostic_extensions, ())
+        application.close()
 
     def test_directory_loads_instances_and_factories_in_filename_order(self) -> None:
         (self.plugin_directory / "alpha.py").write_text(

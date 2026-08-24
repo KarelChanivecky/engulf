@@ -274,6 +274,12 @@ in `engulf._dispatch`. Keep `RuntimePluginAPI` as the public runtime facade;
 activation, context access, state handles, and lock coordination belong to the
 collaborators in `engulf._capabilities`.
 
+Installed discovery takes one application-scoped entry-point snapshot shared by
+normal-plugin and diagnostic catalogs. Resolve distribution identity through that
+index so name and version metadata are read once per relevant distribution. Do not
+introduce a process-global cache; each fresh `Application` must observe a fresh
+installed environment.
+
 All plugin calls in dispatch must go through the internal execution endpoint. Do not
 restore direct `LoadedPlugin` implementation access in `_dispatch`, and do not expose
 live implementations through public application inspection. Endpoint cleanup must

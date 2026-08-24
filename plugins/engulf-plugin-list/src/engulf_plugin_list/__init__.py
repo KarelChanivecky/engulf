@@ -38,7 +38,7 @@ class PluginListDiagnostic(DiagnosticPlugin):
                 ", ".join(extension.triggers) or "-",
                 extension.distribution,
                 extension.version,
-                "yes" if extension.available else "no",
+                _availability(extension.available),
             )
             for extension in api.diagnostic_extensions
         ]
@@ -59,6 +59,12 @@ class PluginListDiagnostic(DiagnosticPlugin):
             diagnostic_rows,
         )
         return DiagnosticContribution(stdout=output)
+
+
+def _availability(available: bool | None) -> str:
+    if available is None:
+        return "not checked"
+    return "yes" if available else "no"
 
 
 def _source(source: PluginSource) -> str:

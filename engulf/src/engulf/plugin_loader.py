@@ -10,7 +10,7 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from importlib.metadata import EntryPoint, entry_points
+from importlib.metadata import Distribution, EntryPoint, entry_points
 from pathlib import Path
 from types import ModuleType
 
@@ -50,6 +50,81 @@ class PluginElevationError(PluginLoadError):
 
 class PluginRequirementError(PluginLoadError):
     """Raised when an application-required plugin is unavailable."""
+
+
+@dataclass(frozen=True, slots=True)
+class DistributionIdentity:
+    """Distribution identity cached for entry-point provenance comparisons."""
+
+    present: bool
+    name: str | None
+    version: str | None
+    normalized_name: str
+
+
+_MISSING_DISTRIBUTION_IDENTITY = DistributionIdentity(False, None, None, "")
+
+
+class EntryPointIndex:
+    """One installed entry-point snapshot shared by an application construction."""
+
+    __slots__ = ("_distribution_identities", "_groups")
+
+    def __init__(self, groups: dict[str, tuple[EntryPoint, ...]]) -> None:
+        self._groups = dict(groups)
+        self._distribution_identities: dict[
+            int, tuple[Distribution, DistributionIdentity]
+        ] = {}
+
+    @classmethod
+    def discover(cls, groups: Iterable[str]) -> EntryPointIndex:
+        if isinstance(groups, str):
+            raise TypeError("entry-point groups must be an iterable, not a string")
+        requested = tuple(dict.fromkeys(groups))
+        if any(not isinstance(group, str) or not group for group in requested):
+            raise ValueError("entry-point groups must be nonempty strings")
+        try:
+            discovered = entry_points()
+        except Exception as error:
+            raise PluginLoadError(
+                "failed to discover installed entry points"
+            ) from error
+        selected: dict[str, list[EntryPoint]] = {group: [] for group in requested}
+        for entry_point in discovered:
+            group_entries = selected.get(entry_point.group)
+            if group_entries is not None:
+                group_entries.append(entry_point)
+        return cls(
+            {group: tuple(group_entries) for group, group_entries in selected.items()}
+        )
+
+    def entries(self, group: str) -> tuple[EntryPoint, ...]:
+        try:
+            return self._groups[group]
+        except KeyError as error:
+            raise ValueError(f"entry-point group was not indexed: {group!r}") from error
+
+    def distribution_identity(self, entry_point: EntryPoint) -> DistributionIdentity:
+        distribution = entry_point.dist
+        if distribution is None:
+            return _MISSING_DISTRIBUTION_IDENTITY
+        key = id(distribution)
+        cached = self._distribution_identities.get(key)
+        if cached is not None:
+            cached_distribution, identity = cached
+            if cached_distribution is not distribution:
+                raise AssertionError("entry-point distribution identity collision")
+            return identity
+        name = distribution.name
+        version = distribution.version
+        identity = DistributionIdentity(
+            True,
+            name,
+            version,
+            _normalize_distribution_name(name or ""),
+        )
+        self._distribution_identities[key] = (distribution, identity)
+        return identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,6 +394,7 @@ def discover_plugins(
     plugin_directory: Path | None = None,
     plugin_declaration_application_ids: Iterable[str] = (),
     discover_installed: bool,
+    entry_point_index: EntryPointIndex | None = None,
 ) -> PluginDiscovery:
     """Select compatible directory and installed plugins for one application."""
     if not isinstance(contract, GoalContract):
@@ -327,6 +403,10 @@ def discover_plugins(
         raise TypeError("policy must be a PluginPolicy")
     if not isinstance(discover_installed, bool):
         raise TypeError("discover_installed must be a boolean")
+    if entry_point_index is not None and not isinstance(
+        entry_point_index, EntryPointIndex
+    ):
+        raise TypeError("entry_point_index must be an EntryPointIndex or None")
     if plugin_directory is not None and (
         not isinstance(plugin_directory, Path) or not plugin_directory.is_absolute()
     ):
@@ -364,13 +444,21 @@ def discover_plugins(
             contract.goal_id,
             contract.api_major,
         )
-        catalog_entries = _entry_point_catalog(catalog_group)
-        application_entry_catalogs = [
-            _entry_point_catalog(
-                application_plugin_entry_point_group(declaration_application_id)
-            )
+        application_groups = tuple(
+            application_plugin_entry_point_group(declaration_application_id)
             for declaration_application_id in declaration_application_ids
+        )
+        if entry_point_index is None:
+            entry_point_index = EntryPointIndex.discover(
+                (catalog_group, *application_groups)
+            )
+        catalog_entries = _entry_point_catalog(catalog_group, entry_point_index)
+        application_entry_catalogs = [
+            _entry_point_catalog(group, entry_point_index)
+            for group in application_groups
         ]
+    if entry_point_index is None:
+        entry_point_index = EntryPointIndex({})
 
     declared_ids: set[str] = set()
     for application_entries in application_entry_catalogs:
@@ -378,7 +466,11 @@ def discover_plugins(
             catalog = catalog_entries.get(plugin_id)
             if catalog is None:
                 continue
-            if not _same_entry_point_source(declaration, catalog):
+            if not _same_entry_point_source(
+                declaration,
+                catalog,
+                entry_point_index,
+            ):
                 raise PluginLoadError(
                     f"application declaration for plugin {plugin_id!r} does not "
                     "match its goal catalog entry"
@@ -408,6 +500,7 @@ def discover_plugins(
                 loaded_catalog,
                 metadata,
                 sources,
+                entry_point_index,
             )
         except BaseException as discovery_error:
             _cleanup_discovery_failure(discovery_error, metadata.values())
@@ -420,11 +513,18 @@ def discover_plugins(
         if plugin_id in catalog_entries
     )
     try:
-        for entry_point in sorted(selected_entries, key=_entry_point_sort_key):
+        for entry_point in sorted(
+            selected_entries,
+            key=lambda item: _entry_point_sort_key(item, entry_point_index),
+        ):
             installed_plugin = loaded_catalog.get(entry_point.name)
             if installed_plugin is None:
-                source = _installed_plugin_source(entry_point)
-                installed_plugin = _load_catalog_plugin(entry_point, contract)
+                source = _installed_plugin_source(entry_point, entry_point_index)
+                installed_plugin = _load_catalog_plugin(
+                    entry_point,
+                    contract,
+                    entry_point_index,
+                )
                 sources[id(installed_plugin)] = source
             installed_plugins.append(installed_plugin)
     except BaseException as discovery_error:
@@ -475,6 +575,7 @@ def _expand_allowlist_dependencies(
     loaded_catalog: dict[str, Plugin],
     metadata: dict[int, LoadedPlugin],
     sources: dict[int, PluginSource],
+    entry_point_index: EntryPointIndex,
 ) -> None:
     pending = list(selected_local_ids | selected_catalog_ids)
     heapq.heapify(pending)
@@ -492,8 +593,12 @@ def _expand_allowlist_dependencies(
             selected_catalog_ids.add(plugin_id)
             installed = loaded_catalog.get(plugin_id)
             if installed is None:
-                source = _installed_plugin_source(entry_point)
-                installed = _load_catalog_plugin(entry_point, contract)
+                source = _installed_plugin_source(entry_point, entry_point_index)
+                installed = _load_catalog_plugin(
+                    entry_point,
+                    contract,
+                    entry_point_index,
+                )
                 loaded_catalog[plugin_id] = installed
                 sources[id(installed)] = source
             plugins.append(installed)
@@ -519,8 +624,9 @@ def _expand_allowlist_dependencies(
 def _load_catalog_plugin(
     entry_point: EntryPoint,
     contract: GoalContract,
+    entry_point_index: EntryPointIndex,
 ) -> Plugin:
-    identifier = _entry_point_identifier(entry_point)
+    identifier = _entry_point_identifier(entry_point, entry_point_index)
     plugin = _load_entry_point(entry_point, identifier)
     if plugin.plugin_id != entry_point.name:
         raise PluginLoadError(
@@ -802,8 +908,14 @@ def _find_cycle(
     raise AssertionError("cyclic graph did not contain a discoverable cycle")
 
 
-def _entry_point_sort_key(entry_point: EntryPoint) -> tuple[str, str, str]:
-    distribution_name = _entry_point_distribution_name(entry_point)
+def _entry_point_sort_key(
+    entry_point: EntryPoint,
+    entry_point_index: EntryPointIndex,
+) -> tuple[str, str, str]:
+    distribution_name = _entry_point_distribution_name(
+        entry_point,
+        entry_point_index,
+    )
     return distribution_name.casefold(), entry_point.name, entry_point.value
 
 
@@ -825,42 +937,48 @@ def _directory_plugin_source(
 
 def _installed_plugin_source(
     entry_point: EntryPoint,
+    entry_point_index: EntryPointIndex,
 ) -> PluginSource:
-    distribution = entry_point.dist
+    distribution = entry_point_index.distribution_identity(entry_point)
     return PluginSource(
         kind=PluginSourceKind.INSTALLED,
         target=entry_point.value,
-        distribution_name=(None if distribution is None else distribution.name or None),
-        distribution_version=(
-            None if distribution is None else distribution.version or None
-        ),
+        distribution_name=distribution.name or None,
+        distribution_version=distribution.version or None,
         entry_point_group=entry_point.group,
         entry_point_value=entry_point.value,
     )
 
 
-def _entry_point_identifier(entry_point: EntryPoint) -> str:
-    distribution_name = _entry_point_distribution_name(entry_point)
-    version = entry_point.dist.version if entry_point.dist is not None else "unknown"
+def _entry_point_identifier(
+    entry_point: EntryPoint,
+    entry_point_index: EntryPointIndex,
+) -> str:
+    distribution = entry_point_index.distribution_identity(entry_point)
+    distribution_name = distribution.name or "unknown-distribution"
+    version = distribution.version or "unknown"
     return f"{distribution_name} {version}:{entry_point.name}"
 
 
-def _entry_point_distribution_name(entry_point: EntryPoint) -> str:
-    if entry_point.dist is None:
-        return "unknown-distribution"
-    return entry_point.dist.name or "unknown-distribution"
+def _entry_point_distribution_name(
+    entry_point: EntryPoint,
+    entry_point_index: EntryPointIndex,
+) -> str:
+    return (
+        entry_point_index.distribution_identity(entry_point).name
+        or "unknown-distribution"
+    )
 
 
-def _entry_point_catalog(group: str) -> dict[str, EntryPoint]:
-    try:
-        discovered = entry_points(group=group)
-    except Exception as error:
-        raise PluginLoadError(
-            f"failed to discover installed plugins in entry-point group {group!r}"
-        ) from error
-
+def _entry_point_catalog(
+    group: str,
+    entry_point_index: EntryPointIndex,
+) -> dict[str, EntryPoint]:
     catalog: dict[str, EntryPoint] = {}
-    for entry_point in sorted(discovered, key=_entry_point_sort_key):
+    for entry_point in sorted(
+        entry_point_index.entries(group),
+        key=lambda item: _entry_point_sort_key(item, entry_point_index),
+    ):
         try:
             plugin_id = validate_global_identifier(
                 entry_point.name,
@@ -872,23 +990,26 @@ def _entry_point_catalog(group: str) -> dict[str, EntryPoint]:
         if existing is not None:
             raise PluginLoadError(
                 f"duplicate plugin ID {plugin_id!r} in entry-point group {group!r}: "
-                f"{_entry_point_identifier(existing)} and "
-                f"{_entry_point_identifier(entry_point)}"
+                f"{_entry_point_identifier(existing, entry_point_index)} and "
+                f"{_entry_point_identifier(entry_point, entry_point_index)}"
             )
         catalog[plugin_id] = entry_point
     return catalog
 
 
-def _same_entry_point_source(left: EntryPoint, right: EntryPoint) -> bool:
+def _same_entry_point_source(
+    left: EntryPoint,
+    right: EntryPoint,
+    entry_point_index: EntryPointIndex,
+) -> bool:
     if left.value != right.value:
         return False
-    left_distribution = left.dist
-    right_distribution = right.dist
-    if left_distribution is None or right_distribution is None:
-        return left_distribution is None and right_distribution is None
+    left_distribution = entry_point_index.distribution_identity(left)
+    right_distribution = entry_point_index.distribution_identity(right)
+    if not left_distribution.present or not right_distribution.present:
+        return left_distribution.present is right_distribution.present
     return (
-        _normalize_distribution_name(left_distribution.name or "")
-        == _normalize_distribution_name(right_distribution.name or "")
+        left_distribution.normalized_name == right_distribution.normalized_name
         and left_distribution.version == right_distribution.version
     )
 
