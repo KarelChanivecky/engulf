@@ -20,8 +20,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "engulf>=0.1,<1",
-    "engulf-executable-wrapper-api>=1.0,<2",
+    "engulf>=0.1.2,<1",
+    "engulf-executable-wrapper-api>=1.1,<2",
 ]
 
 [project.scripts]
