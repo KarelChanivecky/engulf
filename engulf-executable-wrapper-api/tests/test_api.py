@@ -26,7 +26,7 @@ class ExamplePlugin(ExecutableWrapperPlugin):
 class ExecutableWrapperApiTestCase(unittest.TestCase):
     def test_contract_identity_and_plugin_defaults(self) -> None:
         self.assertEqual(EXECUTABLE_WRAPPER_API_MAJOR, 1)
-        self.assertEqual(EXECUTABLE_WRAPPER_API_VERSION, "1.0.0")
+        self.assertEqual(EXECUTABLE_WRAPPER_API_VERSION, "1.1.0")
         self.assertEqual(EXECUTABLE_WRAPPER_GOAL_ID, "org.engulf.executable-wrapper")
         self.assertEqual(
             ExamplePlugin.goal_requirement,
