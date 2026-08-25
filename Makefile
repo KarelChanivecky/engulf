@@ -1,16 +1,16 @@
 PYTHON := .venv/bin/python
-PACKAGE_DIRS := \
-	engulf-api \
-	engulf \
-	engulf-executable-wrapper-api \
-	engulf-executable-wrapper \
-	plugins/engulf-plugin-list
-PACKAGE_NAMES := \
+PACKAGES := \
 	engulf-api \
 	engulf \
 	engulf-executable-wrapper-api \
 	engulf-executable-wrapper \
 	engulf-plugin-list
+
+# Package name -> source directory (defaults to the package name)
+DIR_engulf-plugin-list := plugins/engulf-plugin-list
+
+dir_of = $(or $(DIR_$1),$1)
+
 INSTALL_PYTHON ?= python3.14
 
 .PHONY: environment clean-dist build publish install test-repository
@@ -28,23 +28,44 @@ environment:
 clean-dist:
 	rm -rf -- dist
 
-build: environment clean-dist
-	@set -eu; \
-	for package in $(PACKAGE_DIRS); do \
-		output="dist/$$(basename "$$package")"; \
-		mkdir -p "$$output"; \
-		$(PYTHON) -m build --no-isolation --outdir "$$output" "$$package"; \
-	done
-	@$(PYTHON) -m twine check dist/*/*
+build: $(PACKAGES:%=dist/%/.built)
 
-publish: build
-	@test -n "$${TWINE_REPOSITORY_URL:-}" || { echo "error: TWINE_REPOSITORY_URL is required" >&2; exit 1; }
-	@$(PYTHON) -m twine upload --repository-url "$$TWINE_REPOSITORY_URL" dist/*/*
+publish: $(PACKAGES:%=publish-%)
 
 install:
 	@command -v "$(INSTALL_PYTHON)" >/dev/null 2>&1 || { echo "error: $(INSTALL_PYTHON) is required" >&2; exit 1; }
-	@$(INSTALL_PYTHON) -m pip install $(PACKAGE_NAMES)
+	@$(INSTALL_PYTHON) -m pip install $(PACKAGES)
 
 test-repository:
 	python3 -m unittest discover -s repository/tests -v
 	bash -n repository.sh build.sh publish.sh
+
+# --- Per-package build / publish rules --------------------------------------
+#
+# dist/<pkg>/.built is a stamp file: a package is rebuilt only when one of its
+# own files changes, and published only on demand (or via `publish`).
+# `make build-<pkg>` / `make publish-<pkg>` work on a single package;
+# `make build` / `make publish` cover all of them.
+
+define package_rules
+
+.PHONY: build-$1
+
+$1_files := $(shell find $(call dir_of,$1) -type f -not -path '*/__pycache__/*' -not -name '*.pyc')
+
+dist/$1/.built: $(call dir_of,$1)/pyproject.toml $$($1_files) | environment
+	@rm -rf -- dist/$1
+	@mkdir -p dist/$1
+	$(PYTHON) -m build --no-isolation --outdir dist/$1 $(call dir_of,$1)
+	@$(PYTHON) -m twine check dist/$1/*
+	@touch $$@
+
+build-$1: dist/$1/.built
+
+publish-$1: build-$1
+	@test -n "$$$${TWINE_REPOSITORY_URL:-}" || { echo "error: TWINE_REPOSITORY_URL is required" >&2; exit 1; }
+	@$(PYTHON) -m twine upload --skip-existing --repository-url "$$$$TWINE_REPOSITORY_URL" dist/$1/*
+
+endef
+
+$(foreach pkg,$(PACKAGES),$(eval $(call package_rules,$(pkg))))
