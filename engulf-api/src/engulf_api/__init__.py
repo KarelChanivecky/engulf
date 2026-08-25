@@ -51,7 +51,7 @@ from .state import StateScope, StateStore, WorkspaceState
 from .validation import validate_exit_code
 
 PLUGIN_API_MAJOR = 1
-PLUGIN_API_VERSION = "1.0.0"
+PLUGIN_API_VERSION = "1.1.0"
 
 __all__ = [
     "PLUGIN_API_MAJOR",

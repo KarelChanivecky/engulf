@@ -13,7 +13,7 @@ are not normal goal plugins and do not receive lifecycle or goal-phase APIs.
 The package is typed, OS-independent, and requires Python 3.14 or newer.
 
 Import public contracts from `engulf_api`, not from its implementation modules.
-`PLUGIN_API_MAJOR` is `1` and `PLUGIN_API_VERSION` is `"1.0.0"`. The major is part
+`PLUGIN_API_MAJOR` is `1` and `PLUGIN_API_VERSION` is `"1.1.0"`. The major is part
 of normal-plugin entry-point groups; a goal's independently versioned compatibility
 boundary is its `GoalRequirement`.
 
