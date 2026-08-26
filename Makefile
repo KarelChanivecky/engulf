@@ -33,11 +33,7 @@ clean-dist:
 
 build: $(PACKAGES:%=dist/%/.built)
 
-# Publish each package only when its freshly built tree has not been uploaded
-# yet. twine --skip-existing is not usable here: it requires server API support
-# our repository lacks, so freshness is tracked with a .published stamp that
-# every rebuild invalidates.
-publish: $(PACKAGES:%=dist/%/.published)
+publish: $(PACKAGES:%=publish-%)
 
 install:
 	@command -v "$(INSTALL_PYTHON)" >/dev/null 2>&1 || { echo "error: $(INSTALL_PYTHON) is required" >&2; exit 1; }
@@ -70,15 +66,14 @@ dist/$1/.built: $(call dir_of,$1)/pyproject.toml $$($1_files) | environment
 
 dist/$1/.published: dist/$1/.built
 	@test -n "$$$${TWINE_REPOSITORY_URL:-}" || { echo "error: TWINE_REPOSITORY_URL is required" >&2; exit 1; }
-	$(PYTHON) -m twine upload --repository-url "$$$$TWINE_REPOSITORY_URL" dist/$1/*
+	$(PYTHON) twine_upload.py upload --skip-existing --repository-url "$$$$TWINE_REPOSITORY_URL" dist/$1/*
 	@touch $$@
 
 build-$1: dist/$1/.built
 
-# Force an upload attempt even when nothing was rebuilt (e.g. a previous
-# publish failed after build, or the .published stamp was deleted manually):
-# remove dist/<pkg>/.published and re-run, since the publish recipe is skipped
-# whenever that stamp is up to date.
+# The .published stamp short-circuits repeat uploads of an unchanged build;
+# --skip-existing (via twine_upload.py) additionally lets the server confirm
+# freshness when the stamp is missing but the artifacts were already uploaded.
 publish-$1: dist/$1/.published
 
 endef
