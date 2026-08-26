@@ -30,7 +30,11 @@ clean-dist:
 
 build: $(PACKAGES:%=dist/%/.built)
 
-publish: $(PACKAGES:%=publish-%)
+# Publish each package only when its freshly built tree has not been uploaded
+# yet. twine --skip-existing is not usable here: it requires server API support
+# our repository lacks, so freshness is tracked with a .published stamp that
+# every rebuild invalidates.
+publish: $(PACKAGES:%=dist/%/.published)
 
 install:
 	@command -v "$(INSTALL_PYTHON)" >/dev/null 2>&1 || { echo "error: $(INSTALL_PYTHON) is required" >&2; exit 1; }
@@ -42,14 +46,15 @@ test-repository:
 
 # --- Per-package build / publish rules --------------------------------------
 #
-# dist/<pkg>/.built is a stamp file: a package is rebuilt only when one of its
-# own files changes, and published only on demand (or via `publish`).
+# dist/<pkg>/.built stamps a successful build (rebuilt only when the package's
+# own files change); dist/<pkg>/.published stamps a successful upload of that
+# build (removed by every rebuild, so new artifacts are always republished).
 # `make build-<pkg>` / `make publish-<pkg>` work on a single package;
 # `make build` / `make publish` cover all of them.
 
 define package_rules
 
-.PHONY: build-$1
+.PHONY: build-$1 publish-$1
 
 $1_files := $(shell find $(call dir_of,$1) -type f -not -path '*/__pycache__/*' -not -name '*.pyc')
 
@@ -60,11 +65,18 @@ dist/$1/.built: $(call dir_of,$1)/pyproject.toml $$($1_files) | environment
 	@$(PYTHON) -m twine check dist/$1/*
 	@touch $$@
 
+dist/$1/.published: dist/$1/.built
+	@test -n "$$$${TWINE_REPOSITORY_URL:-}" || { echo "error: TWINE_REPOSITORY_URL is required" >&2; exit 1; }
+	$(PYTHON) -m twine upload --repository-url "$$$$TWINE_REPOSITORY_URL" dist/$1/*
+	@touch $$@
+
 build-$1: dist/$1/.built
 
-publish-$1: build-$1
-	@test -n "$$$${TWINE_REPOSITORY_URL:-}" || { echo "error: TWINE_REPOSITORY_URL is required" >&2; exit 1; }
-	@$(PYTHON) -m twine upload --skip-existing --repository-url "$$$$TWINE_REPOSITORY_URL" dist/$1/*
+# Force an upload attempt even when nothing was rebuilt (e.g. a previous
+# publish failed after build, or the .published stamp was deleted manually):
+# remove dist/<pkg>/.published and re-run, since the publish recipe is skipped
+# whenever that stamp is up to date.
+publish-$1: dist/$1/.published
 
 endef
 
