@@ -66,6 +66,8 @@ dist/$1/.built: $(call dir_of,$1)/pyproject.toml $$($1_files) | environment
 
 dist/$1/.published: dist/$1/.built
 	@test -n "$$$${TWINE_REPOSITORY_URL:-}" || { echo "error: TWINE_REPOSITORY_URL is required" >&2; exit 1; }
+	@test -n "$$$${TWINE_USERNAME:-}" || { echo "error: TWINE_USERNAME and TWINE_PASSWORD are required (or run through publish.sh with the managed repository)" >&2; exit 1; }
+	@test -n "$$$${TWINE_PASSWORD:-}" || { echo "error: TWINE_USERNAME and TWINE_PASSWORD are required (or run through publish.sh with the managed repository)" >&2; exit 1; }
 	$(PYTHON) twine_upload.py upload --skip-existing --repository-url "$$$$TWINE_REPOSITORY_URL" dist/$1/*
 	@touch $$@
 

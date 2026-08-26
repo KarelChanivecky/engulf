@@ -9,10 +9,17 @@ before dispatching to the regular twine CLI; when twine lets third-party
 repositories opt into --skip-existing, this wrapper can be deleted.
 """
 
+import os
+
 from twine.__main__ import main as twine_main
 from twine.settings import Settings
 
 Settings.verify_feature_capability = lambda self: None  # noqa: E731
+
+# Authentication is configured per-invocation via TWINE_USERNAME/TWINE_PASSWORD;
+# without a desktop secret service, keyring probing blocks long enough to look
+# hung before twine prompts interactively.
+os.environ.setdefault("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
 
 if __name__ == "__main__":
     twine_main()
