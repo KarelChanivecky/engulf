@@ -33,6 +33,11 @@ clean-dist:
 
 build: $(PACKAGES:%=dist/%/.built)
 
+# Always attempt an upload; the repository itself decides what is already
+# published (twine_upload.py + --skip-existing turns a 409 into a no-op).
+# Local "already published" stamps are deliberately NOT used: they cannot know
+# which repository the artifacts went to, so they lie after switching
+# TWINE_REPOSITORY_URL or repopulating a wiped/rebuilt repository.
 publish: $(PACKAGES:%=publish-%)
 
 install:
@@ -46,8 +51,8 @@ test-repository:
 # --- Per-package build / publish rules --------------------------------------
 #
 # dist/<pkg>/.built stamps a successful build (rebuilt only when the package's
-# own files change); dist/<pkg>/.published stamps a successful upload of that
-# build (removed by every rebuild, so new artifacts are always republished).
+# own files change). Publishing is not stamped locally: each publish-<pkg>
+# asks the repository, and --skip-existing skips files that are already there.
 # `make build-<pkg>` / `make publish-<pkg>` work on a single package;
 # `make build` / `make publish` cover all of them.
 
@@ -64,19 +69,13 @@ dist/$1/.built: $(call dir_of,$1)/pyproject.toml $$($1_files) | environment
 	@$(PYTHON) -m twine check dist/$1/*
 	@touch $$@
 
-dist/$1/.published: dist/$1/.built
+build-$1: dist/$1/.built
+
+publish-$1: build-$1
 	@test -n "$$$${TWINE_REPOSITORY_URL:-}" || { echo "error: TWINE_REPOSITORY_URL is required" >&2; exit 1; }
 	@test -n "$$$${TWINE_USERNAME:-}" || { echo "error: TWINE_USERNAME and TWINE_PASSWORD are required (or run through publish.sh with the managed repository)" >&2; exit 1; }
 	@test -n "$$$${TWINE_PASSWORD:-}" || { echo "error: TWINE_USERNAME and TWINE_PASSWORD are required (or run through publish.sh with the managed repository)" >&2; exit 1; }
 	$(PYTHON) twine_upload.py upload --skip-existing --repository-url "$$$$TWINE_REPOSITORY_URL" dist/$1/*
-	@touch $$@
-
-build-$1: dist/$1/.built
-
-# The .published stamp short-circuits repeat uploads of an unchanged build;
-# --skip-existing (via twine_upload.py) additionally lets the server confirm
-# freshness when the stamp is missing but the artifacts were already uploaded.
-publish-$1: dist/$1/.published
 
 endef
 
