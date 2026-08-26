@@ -13,7 +13,10 @@ dir_of = $(or $(DIR_$1),$1)
 
 INSTALL_PYTHON ?= python3.14
 
-.PHONY: environment clean-dist build publish install test-repository
+.PHONY: all environment clean-dist build publish install test-repository
+
+# Default target: build everything, then upload whatever was not published yet.
+all: build publish
 
 environment:
 	@if [ ! -d .venv ]; then \
