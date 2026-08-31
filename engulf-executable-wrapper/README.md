@@ -111,9 +111,10 @@ The wrapper maps call outcomes to framework results as follows:
 | Lifecycle, phase, validation, or cleanup error | `FRAMEWORK_FAILED` | `70` |
 
 `after_call` runs for preemption, spawn failure, child signal, and normal child exit.
-If analysis or preparation itself raises, that phase stops and no synthetic
-after-call outcome is created; outer lifecycle cleanup and framework-failure handling
-still run.
+If preparation raises, the phase stops and `after_call` receives a synthetic
+`FRAMEWORK_FAILED` outcome before the original exception continues to outer lifecycle
+handling. This lets plugins compensate preparation side effects. Analysis errors occur
+before external work is allowed, so they do not create a synthetic after-call outcome.
 
 ## Help
 

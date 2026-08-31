@@ -49,7 +49,7 @@ from engulf_executable_wrapper_api import (
     Shell,
 )
 
-from engulf import LOG_LEVEL_NAMES, logging_option_names
+from engulf import FRAMEWORK_ERROR_EXIT, LOG_LEVEL_NAMES, logging_option_names
 
 _FORWARDED_SIGNALS = (
     signal.SIGHUP,
@@ -375,16 +375,37 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
             duration = 0.0
         else:
             if mode is CallMode.NORMAL:
-                api.dispatch(
-                    _PREPARE_CALL,
-                    PreparedCallEvent(
-                        self._executable,
-                        wrapper_args,
-                        effective_args,
-                        mode,
-                        invocation.environment,
-                    ),
-                )
+                try:
+                    api.dispatch(
+                        _PREPARE_CALL,
+                        PreparedCallEvent(
+                            self._executable,
+                            wrapper_args,
+                            effective_args,
+                            mode,
+                            invocation.environment,
+                        ),
+                    )
+                except BaseException as error:
+                    outcome = CallOutcome(
+                        OutcomeKind.FRAMEWORK_FAILED,
+                        FRAMEWORK_ERROR_EXIT,
+                        process_started=False,
+                        error=str(error),
+                    )
+                    api.dispatch(
+                        _AFTER_CALL,
+                        AfterCallEvent(
+                            self._executable,
+                            wrapper_args,
+                            effective_args,
+                            mode,
+                            outcome,
+                            0.0,
+                            invocation.environment,
+                        ),
+                    )
+                    raise
             outcome, duration = self._execute(effective_args, api)
 
         after_event = AfterCallEvent(

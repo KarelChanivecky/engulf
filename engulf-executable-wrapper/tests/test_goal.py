@@ -873,6 +873,29 @@ class ExecutableWrapperGoalTestCase(unittest.TestCase):
         self.assertEqual(len(second.after_events), 0)
         self.assertFalse(self.record.exists())
 
+    def test_prepare_exception_emits_framework_failure_to_finalizers(self) -> None:
+        def fail(event, api) -> None:
+            raise RuntimeError("prepare failed")
+
+        first = RecordingPlugin(prepare=fail)
+        second = RecordingPlugin()
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            result = self.make_application(first, second).run([])
+
+        self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
+        self.assertEqual(len(first.prepare_events), 1)
+        self.assertEqual(len(second.prepare_events), 0)
+        self.assertEqual(len(first.after_events), 1)
+        self.assertEqual(len(second.after_events), 1)
+        for plugin in (first, second):
+            outcome = plugin.after_events[0].outcome
+            self.assertEqual(outcome.kind, OutcomeKind.FRAMEWORK_FAILED)
+            self.assertEqual(outcome.exit_code, FRAMEWORK_ERROR_EXIT)
+            self.assertFalse(outcome.process_started)
+            self.assertIn("prepare failed", outcome.error or "")
+        self.assertFalse(self.record.exists())
+
     def test_after_exception_stops_after_phase_and_returns_70(self) -> None:
         def fail(event, api) -> None:
             raise RuntimeError("after failed")
