@@ -241,7 +241,11 @@ preparer from running. Use `preempted_by` as a stable plugin ID.
 
 A failed preparation is not a call. It dispatches `prepare_failed` to exactly the
 plugins that completed `prepare_call`, in reverse preparation order, and never
-dispatches `after_call`. Do not reintroduce a synthetic `FRAMEWORK_FAILED` outcome
+dispatches `after_call`. A preparer that touches external resources therefore needs
+two unwind paths: `prepare_failed` for a later plugin's failure, and its own
+`try`/`finally` for its own. They differ in lock state, so a release helper shared
+between them must assume its leases are already held and let `prepare_failed` acquire
+them. Do not reintroduce a synthetic `FRAMEWORK_FAILED` outcome
 for it, and keep `SPAWN_FAILED` for a prepared call whose process would not start.
 Invocation-scoped cleanup that does not depend on preparation progress belongs in
 `after_goal`.

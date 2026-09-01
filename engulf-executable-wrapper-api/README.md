@@ -273,6 +273,17 @@ preparation got. Two callbacks it does not reach:
 - plugins whose `prepare_call` never ran are not called, because they prepared
   nothing.
 
+A plugin that acquires leases or opens transactions therefore needs both paths, and
+they do not run under the same lock state. Inside `prepare_call`, whatever that
+callback acquired is still held, so its self-unwind must release what it built
+without acquiring again. By the time `prepare_failed` runs, the failed callback has
+been deactivated and everything it held has been released, and a lease context from
+that activation is no longer usable, so cleanup there acquires what it needs itself.
+One helper cannot serve both paths: called from inside `prepare_call` it raises
+`RuntimeError: nested or overlapping resource leases are not allowed`, and that error
+replaces the preparation failure that caused the unwind. Write the release step so it
+assumes the leases are held, and have `prepare_failed` acquire them around it.
+
 This phase isolates failures: a raising `prepare_failed` is reported and the
 remaining plugins still unwind. The original preparation error then continues to
 outer lifecycle handling and produces framework exit code 70. `after_call` does not
