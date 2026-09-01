@@ -987,6 +987,94 @@ class ExecutableWrapperGoalTestCase(unittest.TestCase):
         self.assertIn("cleanup failed", stderr.getvalue())
         self.assertIn("prepare failed", stderr.getvalue())
 
+    def test_interrupt_during_preparation_unwinds_prepared_plugins(self) -> None:
+        def interrupt(event, api) -> None:
+            raise KeyboardInterrupt
+
+        first = RecordingPlugin(plugin_id="tests.wrapper.first", priority=100)
+        second = RecordingPlugin(plugin_id="tests.wrapper.second", priority=90)
+        interrupted = RecordingPlugin(
+            plugin_id="tests.wrapper.interrupted",
+            priority=80,
+            prepare=interrupt,
+        )
+        never = RecordingPlugin(plugin_id="tests.wrapper.never", priority=70)
+        application = self.make_application(first, second, interrupted, never)
+
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            application.run([])
+
+        self.assertEqual(len(first.prepare_failed_events), 1)
+        self.assertEqual(len(second.prepare_failed_events), 1)
+        self.assertEqual(interrupted.prepare_failed_events, [])
+        self.assertEqual(never.prepare_events, [])
+        self.assertEqual(never.prepare_failed_events, [])
+        event = second.prepare_failed_events[0]
+        self.assertEqual(event.failed_plugin_id, "tests.wrapper.interrupted")
+        self.assertEqual(event.error, "KeyboardInterrupt")
+        for plugin in (first, second, interrupted, never):
+            self.assertEqual(plugin.after_events, [])
+        self.assertFalse(self.record.exists())
+
+    def test_interrupt_unwind_runs_in_reverse_preparation_order(self) -> None:
+        order: list[str] = []
+
+        def interrupt(event, api) -> None:
+            raise KeyboardInterrupt
+
+        plugins = [
+            RecordingPlugin(
+                plugin_id=f"tests.wrapper.step{index}",
+                priority=100 - index,
+                prepare_failure=lambda event, api, name=f"step{index}": order.append(
+                    name
+                ),
+            )
+            for index in range(3)
+        ]
+        interrupted = RecordingPlugin(
+            plugin_id="tests.wrapper.interrupted",
+            priority=10,
+            prepare=interrupt,
+        )
+
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.make_application(*plugins, interrupted).run([])
+
+        self.assertEqual(order, ["step2", "step1", "step0"])
+
+    def test_exiting_preparer_unwinds_prepared_plugins(self) -> None:
+        def exit_now(event, api) -> None:
+            raise SystemExit(3)
+
+        first = RecordingPlugin(plugin_id="tests.wrapper.first", priority=100)
+        exiting = RecordingPlugin(
+            plugin_id="tests.wrapper.exiting",
+            priority=90,
+            prepare=exit_now,
+        )
+
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            self.make_application(first, exiting).run([])
+
+        self.assertEqual(raised.exception.code, 3)
+        self.assertEqual(len(first.prepare_failed_events), 1)
+        self.assertEqual(
+            first.prepare_failed_events[0].failed_plugin_id,
+            "tests.wrapper.exiting",
+        )
+        self.assertEqual(first.after_events, [])
+        self.assertFalse(self.record.exists())
+
     def test_first_preparer_failure_unwinds_nobody_and_skips_after_call(self) -> None:
         def fail(event, api) -> None:
             raise RuntimeError("prepare failed")

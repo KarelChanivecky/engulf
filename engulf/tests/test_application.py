@@ -138,6 +138,7 @@ class RecordingGoal(Goal[tuple[tuple[str, str], ...]]):
     def __init__(self) -> None:
         self.setup_count = 0
         self.achieve_count = 0
+        self.plugin_ids: tuple[str, ...] = ()
 
     @property
     def contract(self) -> GoalContract:
@@ -148,6 +149,7 @@ class RecordingGoal(Goal[tuple[tuple[str, str], ...]]):
         self.setup_elevated = api.elevated
         self.setup_application = api.application
         self.setup_identity = (api.application_id, api.display_name, api.plugin_ids)
+        self.plugin_ids = api.plugin_ids
         api.dispatch(REGISTER, None)
 
     def achieve(self, invocation: Invocation, api: GoalAPI):
@@ -169,15 +171,20 @@ class UnwindingGoal(RecordingGoal):
         super().__init__()
         self.selection = selection
         self.failure: PluginCallbackError | None = None
+        self.completed: tuple[str, ...] = ()
         self.cleanup_contributions: tuple[str, ...] = ()
 
     def achieve(self, invocation: Invocation, api: GoalAPI):
+        completed: list[str] = []
         try:
-            api.dispatch(CONTRIBUTE, invocation.arguments)
+            for plugin_id in self.plugin_ids:
+                api.dispatch(CONTRIBUTE, invocation.arguments, plugin_ids=(plugin_id,))
+                completed.append(plugin_id)
         except PluginCallbackError as error:
             self.failure = error
+            self.completed = tuple(completed)
             plugin_ids = (
-                tuple(reversed(error.completed_plugin_ids))
+                tuple(reversed(completed))
                 if self.selection == "completed"
                 else self.selection
             )
@@ -595,7 +602,7 @@ class ApplicationTestCase(unittest.TestCase):
         self.assertEqual(goal.failure.plugin_id, "tests.application.unwind_failing")
         self.assertEqual(goal.failure.phase, CONTRIBUTE.phase_id)
         self.assertEqual(
-            goal.failure.completed_plugin_ids,
+            goal.completed,
             ("tests.application.unwind_first", "tests.application.unwind_second"),
         )
         self.assertEqual(

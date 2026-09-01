@@ -250,10 +250,11 @@ with api.leases(
 
 ### `prepare_failed`
 
-When one plugin's `prepare_call` raises, the goal stops preparation, never starts the
-executable, and sends `PreparationFailedEvent` to exactly the plugins whose own
-`prepare_call` already returned, in reverse preparation order. Release there whatever
-that plugin's `prepare_call` acquired:
+When preparation fails, the goal stops, never starts the executable, and sends
+`PreparationFailedEvent` to exactly the plugins whose own `prepare_call` already
+returned, in reverse preparation order. This covers anything that ends the phase: a
+raised exception, `SystemExit`, and a `KeyboardInterrupt` arriving mid-preparation.
+Release there whatever that plugin's `prepare_call` acquired:
 
 ```python
 def prepare_failed(
@@ -269,7 +270,9 @@ Every recipient completed preparation, so this callback never has to ask how far
 preparation got. Two callbacks it does not reach:
 
 - the plugin that raised is not called; unwind partial work inside its own
-  `prepare_call`, normally with `try`/`finally`;
+  `prepare_call` with `try`/`finally`. Use `finally`, not `except Exception`: an
+  interrupt is not an `Exception`, and a narrow catch leaves that plugin's own
+  partial work behind on Ctrl-C even though every plugin before it is unwound;
 - plugins whose `prepare_call` never ran are not called, because they prepared
   nothing.
 
@@ -285,13 +288,15 @@ replaces the preparation failure that caused the unwind. Write the release step 
 assumes the leases are held, and have `prepare_failed` acquire them around it.
 
 This phase isolates failures: a raising `prepare_failed` is reported and the
-remaining plugins still unwind. The original preparation error then continues to
-outer lifecycle handling and produces framework exit code 70. `after_call` does not
-run, because no call was attempted. Invocation-scoped cleanup that does not depend on
-preparation progress belongs in the generic `after_goal` hook instead.
+remaining plugins still unwind. The original failure then continues to outer
+lifecycle handling; an ordinary exception produces framework exit code 70, while an
+interrupt or `SystemExit` propagates unchanged so a wrapper keeps normal Ctrl-C and
+exit semantics. `after_call` does not run, because no call was attempted.
+Invocation-scoped cleanup that does not depend on preparation progress belongs in the
+generic `after_goal` hook instead.
 
-Preparation failures that are not attributed to a plugin callback, such as a
-`KeyboardInterrupt` raised inside preparation, propagate without this event.
+Note that outer `after_goal` hooks do not run when an interrupt ends an invocation,
+so `prepare_failed` is the only unwind an interrupted preparation gets.
 
 ### `after_call`
 

@@ -286,32 +286,15 @@ class ApiTestCase(unittest.TestCase):
 
     def test_callback_failures_are_attributed_to_a_plugin_and_a_phase(self) -> None:
         cause = RuntimeError("prepare failed")
-        error = PluginCallbackError(
-            "tests.api.failing",
-            "tests.api.phase",
-            cause,
-            completed_plugin_ids=("tests.api.first", "tests.api.second"),
-        )
+        error = PluginCallbackError("tests.api.failing", "tests.api.phase", cause)
 
         self.assertIsInstance(error, RuntimeError)
         self.assertEqual(error.plugin_id, "tests.api.failing")
         self.assertEqual(error.phase, "tests.api.phase")
         self.assertIs(error.error, cause)
         self.assertEqual(
-            error.completed_plugin_ids,
-            ("tests.api.first", "tests.api.second"),
-        )
-        self.assertEqual(
             str(error),
             "plugin tests.api.failing failed in tests.api.phase: prepare failed",
-        )
-        self.assertEqual(
-            PluginCallbackError(
-                "tests.api.failing",
-                "tests.api.phase",
-                cause,
-            ).completed_plugin_ids,
-            (),
         )
 
     def test_goal_dispatch_accepts_an_explicit_plugin_selection(self) -> None:

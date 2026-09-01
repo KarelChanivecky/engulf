@@ -185,6 +185,12 @@ class _PhaseDispatcher:
     ) -> None:
         self._preprocess_order = preprocess_order
         self._postprocess_order = postprocess_order
+        self._by_id = {
+            PluginOrder.PREPROCESS: {item.plugin_id: item for item in preprocess_order},
+            PluginOrder.POSTPROCESS: {
+                item.plugin_id: item for item in postprocess_order
+            },
+        }
 
     def dispatch_setup(
         self,
@@ -215,7 +221,6 @@ class _PhaseDispatcher:
     ) -> tuple[AttributedContribution[Any], ...]:
         """Run one phase, isolating plugin failures only when the phase asks."""
         contributions: list[AttributedContribution[Any]] = []
-        completed: list[str] = []
         for item in self._selection(phase, plugin_ids):
             api = apis[item.plugin_id]
             api.activate(phase.phase_id)
@@ -227,13 +232,10 @@ class _PhaseDispatcher:
                     item.plugin_id,
                     phase.phase_id,
                     error,
-                    completed_plugin_ids=tuple(completed),
                 )
                 _report_plugin_error(diagnostics, callback_error)
                 if not phase.isolate_failures:
                     raise callback_error from error
-            else:
-                completed.append(item.plugin_id)
             finally:
                 api.deactivate()
         return tuple(contributions)
@@ -243,10 +245,9 @@ class _PhaseDispatcher:
         phase: GoalPhase[Any, Any, Any, Any],
         plugin_ids: Sequence[str] | None,
     ) -> tuple[LoadedPlugin, ...]:
-        order = self._order_for(phase.order)
         if plugin_ids is None:
-            return order
-        available = {item.plugin_id: item for item in order}
+            return self._order_for(phase.order)
+        available = self._by_id[phase.order]
         selection: list[LoadedPlugin] = []
         seen: set[str] = set()
         for plugin_id in plugin_ids:

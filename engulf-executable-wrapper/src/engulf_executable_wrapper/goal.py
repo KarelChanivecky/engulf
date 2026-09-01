@@ -400,11 +400,7 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
                     mode,
                     invocation.environment,
                 )
-                try:
-                    api.dispatch(_PREPARE_CALL, prepared_event)
-                except PluginCallbackError as error:
-                    self._unwind_preparation(prepared_event, error, api)
-                    raise
+                self._prepare(prepared_event, api)
             outcome, duration = self._execute(effective_args, api)
 
         after_event = AfterCallEvent(
@@ -434,16 +430,36 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
             )
         return GoalResult.completed(outcome, exit_code=outcome.exit_code)
 
+    def _prepare(self, event: PreparedCallEvent, api: GoalAPI) -> None:
+        """Prepare plugins in order, unwinding what completed if anything fails.
+
+        Preparation is dispatched one plugin at a time so the goal knows exactly
+        which plugins finished, whatever ends the phase. An interrupt is not an
+        exception and carries no plugin attribution, so tracking progress here is
+        what lets a Ctrl-C during preparation unwind the same plugins an ordinary
+        failure would.
+        """
+        prepared: list[str] = []
+        for plugin_id in self._plugin_ids:
+            try:
+                api.dispatch(_PREPARE_CALL, event, plugin_ids=(plugin_id,))
+            except BaseException as error:
+                self._unwind_preparation(event, plugin_id, error, tuple(prepared), api)
+                raise
+            prepared.append(plugin_id)
+
     def _unwind_preparation(
         self,
         event: PreparedCallEvent,
-        error: PluginCallbackError,
+        failed_plugin_id: str,
+        error: BaseException,
+        prepared: tuple[str, ...],
         api: GoalAPI,
     ) -> None:
         """Let each plugin that finished preparing release what it prepared."""
-        prepared = error.completed_plugin_ids
         if not prepared:
             return
+        cause = error.error if isinstance(error, PluginCallbackError) else error
         api.dispatch(
             _PREPARE_FAILED,
             PreparationFailedEvent(
@@ -451,8 +467,8 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
                 event.wrapper_args,
                 event.effective_args,
                 event.mode,
-                str(error.error),
-                failed_plugin_id=error.plugin_id,
+                str(cause) or type(cause).__name__,
+                failed_plugin_id=failed_plugin_id,
                 environment=event.environment,
             ),
             plugin_ids=tuple(reversed(prepared)),

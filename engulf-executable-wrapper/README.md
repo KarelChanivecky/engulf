@@ -115,15 +115,19 @@ The wrapper maps call outcomes to framework results as follows:
 `after_call` runs for preemption, spawn failure, child signal, and normal child exit.
 It never runs when no call was attempted.
 
-If a plugin's `prepare_call` raises, preparation stops, the executable never starts,
-and the goal dispatches `PreparationFailedEvent` to exactly the plugins whose own
-`prepare_call` already returned, in reverse preparation order. The plugin that raised
-is not called and must unwind its own partial work; plugins that never prepared are
-not called. That phase isolates failures, so a raising `prepare_failed` is reported
-and the remaining plugins still unwind. The original preparation error then continues
-to outer lifecycle handling as a `FRAMEWORK_FAILED` result with exit 70. Failures that
-are not attributed to a plugin callback, such as a `KeyboardInterrupt` inside
-preparation, propagate without the event.
+If preparation fails, it stops, the executable never starts, and the goal dispatches
+`PreparationFailedEvent` to exactly the plugins whose own `prepare_call` already
+returned, in reverse preparation order. The plugin that raised is not called and must
+unwind its own partial work; plugins that never prepared are not called. That phase
+isolates failures, so a raising `prepare_failed` is reported and the remaining
+plugins still unwind.
+
+Preparation is dispatched one plugin at a time so the goal tracks progress itself
+rather than reading it from the failure. Anything that ends the phase therefore
+unwinds the same plugins: an ordinary exception continues to outer lifecycle handling
+as a `FRAMEWORK_FAILED` result with exit 70, while `KeyboardInterrupt` and
+`SystemExit` unwind first and then propagate unchanged, preserving normal Ctrl-C and
+exit behavior.
 
 Analysis errors occur before external work is allowed, so they unwind nothing.
 

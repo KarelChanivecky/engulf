@@ -374,10 +374,14 @@ One invocation follows this order:
 
 Callback exceptions become `FRAMEWORK_FAILED` results with exit code 70. Goal phase
 exceptions identify the stable `plugin_id`, not a Python class name. Dispatch reports
-the failure once, then raises `PluginCallbackError` to the goal with the plugin IDs
-that already completed that phase, so the goal can address them before the failure
-propagates. A phase declaring `isolate_failures=True` instead calls every selected
-plugin, reports each failure, and does not raise.
+the failure once, then raises `PluginCallbackError` to the goal. A phase declaring
+`isolate_failures=True` instead calls every selected plugin, reports each failure, and
+does not raise.
+
+`KeyboardInterrupt` and `SystemExit` are not attributed or converted; they propagate
+unchanged so callers keep normal Ctrl-C and exit behavior. A goal that must unwind
+completed work dispatches that phase one plugin at a time and tracks progress itself,
+which is what the executable-wrapper goal does for `prepare_call`.
 
 Use `application.invoke(args)` when the typed `GoalResult` matters. Use
 `application.run(args)` for a console entry point.

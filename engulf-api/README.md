@@ -226,10 +226,25 @@ Only two dependency orders exist: `PREPROCESS` and `POSTPROCESS`. Each goal phas
 selects one. Setup phases normally use preprocessing order.
 
 A phase stops at the first failing plugin by default, and the failure reaches the
-goal as `PluginCallbackError`. It names the failing `plugin_id`, the `phase`, the
-original `error`, and `completed_plugin_ids`: the plugins that completed that phase
-before the failure, in the order they ran. Use it to address exactly the plugins
-whose callback finished.
+goal as `PluginCallbackError`, naming the failing `plugin_id`, the `phase`, and the
+original `error`.
+
+Attribution covers `Exception` only. `KeyboardInterrupt` and `SystemExit` are not
+converted, because a framework that rewrote them would break a caller's Ctrl-C and
+exit handling. A goal that must unwind whatever it already did therefore cannot read
+progress from the failure: dispatch such a phase one plugin at a time and record what
+succeeded, so every way the phase can end unwinds the same plugins.
+
+```python
+prepared: list[str] = []
+for plugin_id in self._plugin_ids:
+    try:
+        api.dispatch(PREPARE, event, plugin_ids=(plugin_id,))
+    except BaseException:
+        self.unwind(tuple(reversed(prepared)))
+        raise
+    prepared.append(plugin_id)
+```
 
 Set `isolate_failures=True` on a phase whose callbacks must all run even when one
 raises, such as a phase that releases what an earlier phase acquired. Every selected
@@ -513,7 +528,7 @@ ordering, attribution, state, and policy.
 | `ContextAccessError` | A plugin attempted an undeclared context read or write. |
 | `MissingContextError` | `require_context()` found no value. |
 | `PluginPhaseError` | A callback-bound API, logger, state handle, or lock context was used outside its valid callback. |
-| `PluginCallbackError` | One plugin callback failed in a lifecycle hook or goal phase. Carries `plugin_id`, `phase`, the original `error`, and `completed_plugin_ids`. |
+| `PluginCallbackError` | One plugin callback raised an `Exception` in a lifecycle hook or goal phase. Carries `plugin_id`, `phase`, and the original `error`. |
 | `LockTimeoutError` | A state transaction or resource lease missed its one deadline. |
 | `StateCatalogError` | Centrally managed workspace metadata or protected state layout was invalid. |
 | `UnusedContextWarning` | One or more written context IDs were never read. |
