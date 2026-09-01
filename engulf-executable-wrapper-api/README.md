@@ -47,6 +47,7 @@ from engulf_executable_wrapper_api import (
     BeforeCallEvent,
     CallContribution,
     ExecutableWrapperPlugin,
+    PreparationFailedEvent,
     PreparedCallEvent,
 )
 
@@ -108,6 +109,16 @@ class AuditPlugin(ExecutableWrapperPlugin):
             "calling executable with %d arguments", len(event.effective_args)
         )
 
+    def prepare_failed(
+        self,
+        event: PreparationFailedEvent,
+        api: InvocationAPI,
+    ) -> None:
+        api.logger.info(
+            "releasing audit resources after %s failed preparation",
+            event.failed_plugin_id,
+        )
+
     def after_call(
         self,
         event: AfterCallEvent,
@@ -157,6 +168,7 @@ removed arguments never leak back into another analyzer.
 | --- | --- |
 | `BeforeCallEvent` | `binary`, original `wrapper_args`, `mode`, and normalized `environment`; sent to every analyzer. |
 | `PreparedCallEvent` | `binary`, original `wrapper_args`, merged `effective_args`, `mode`, and normalized `environment`; sent only for viable normal execution. |
+| `PreparationFailedEvent` | Both argument tuples, mode, the failure `error` text, the `failed_plugin_id`, and normalized `environment`; sent only when preparation failed, and only to the plugins that completed preparation. |
 | `AfterCallEvent` | Both argument tuples, mode, final `CallOutcome`, monotonic `duration_seconds`, and normalized `environment`; sent after preemption or an execution attempt. |
 
 `CallMode.NORMAL` is ordinary execution. `CallMode.HELP` is selected only by an
@@ -171,7 +183,7 @@ exact `--help` argument. Help-like values such as `--help=topic` remain normal.
 | `PREEMPTED` | A plugin selected an exit without starting the child. |
 | `SPAWN_FAILED` | The executable could not be resolved or invoked. |
 | `SIGNALED` | The started child terminated from a signal. |
-| `FRAMEWORK_FAILED` | Contract representation for framework failure; current phase failures normally become an outer framework-failed `GoalResult` before an after-call event can be created. |
+| `FRAMEWORK_FAILED` | Contract representation for framework failure; phase failures become an outer framework-failed `GoalResult` rather than an after-call event. |
 
 Every outcome exit is an exact integer from 0 through 255. The goal runtime maps
 not-found to 127, other spawn errors to 126, and signals to at most
@@ -236,11 +248,49 @@ with api.leases(
         reread_merge_and_save(locked)
 ```
 
+### `prepare_failed`
+
+When one plugin's `prepare_call` raises, the goal stops preparation, never starts the
+executable, and sends `PreparationFailedEvent` to exactly the plugins whose own
+`prepare_call` already returned, in reverse preparation order. Release there whatever
+that plugin's `prepare_call` acquired:
+
+```python
+def prepare_failed(
+    self,
+    event: PreparationFailedEvent,
+    api: InvocationAPI,
+) -> None:
+    with api.leases((f"docker-image:{image}",)):
+        remove_prepared_image()
+```
+
+Every recipient completed preparation, so this callback never has to ask how far
+preparation got. Two callbacks it does not reach:
+
+- the plugin that raised is not called; unwind partial work inside its own
+  `prepare_call`, normally with `try`/`finally`;
+- plugins whose `prepare_call` never ran are not called, because they prepared
+  nothing.
+
+This phase isolates failures: a raising `prepare_failed` is reported and the
+remaining plugins still unwind. The original preparation error then continues to
+outer lifecycle handling and produces framework exit code 70. `after_call` does not
+run, because no call was attempted. Invocation-scoped cleanup that does not depend on
+preparation progress belongs in the generic `after_goal` hook instead.
+
+Preparation failures that are not attributed to a plugin callback, such as a
+`KeyboardInterrupt` raised inside preparation, propagate without this event.
+
 ### `after_call`
 
 Finalization uses postprocessing order and receives original/effective arguments,
-duration, and a `CallOutcome`. The outcome identifies preemption with the stable
-`plugin_id` in `preempted_by`.
+duration, and a `CallOutcome`. It runs only when a call was actually attempted:
+preemption, spawn failure, child signal, or child exit. `SPAWN_FAILED` with
+`process_started=False` remains the outcome for "preparation completed, the process
+would not start"; it is not replaced by `PreparationFailedEvent`.
+
+The outcome identifies preemption with the stable `plugin_id` in `preempted_by`.
 
 Callback exceptions stop the current goal phase and produce framework exit code 70.
 Lifecycle cleanup still releases callback-bound locks and processes requested state
@@ -277,6 +327,26 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/example_audit"]
 ```
+
+A plugin that must run before or after another plugin declares that in the same
+file, in a group named after itself:
+
+```toml
+dependencies = [
+    "engulf-api>=1.0,<2",
+    "engulf-executable-wrapper-api>=1.0,<2",
+    "example-engulf-schema>=0.1,<0.2",
+]
+
+[project.entry-points."engulf.plugins.v1.dependency.com_example_shared_audit"]
+"com.example.shared.schema" = "preprocess=before; postprocess=after"
+```
+
+The value declares both orders as `;`-separated `<field>=<value>` pairs, each
+`before`, `after`, or `none`, and at least one must position the dependency. The wheel providing the dependency
+plugin must also be an ordinary project dependency, which is where its version is
+pinned; `engulf-check-packaging` verifies that pairing in CI. `engulf/README.md`
+documents both.
 
 The goal catalog is the technical compatibility declaration. Each application group
 is plugin-side activation consent. The entry-point name must exactly equal
@@ -413,7 +483,7 @@ block to the stable plugin ID.
 | Area | Names |
 | --- | --- |
 | Contract | `EXECUTABLE_WRAPPER_GOAL_ID`, `EXECUTABLE_WRAPPER_API_MAJOR`, `EXECUTABLE_WRAPPER_API_VERSION`, `ExecutableWrapperPlugin`, `HelpAPI` |
-| Calls | `CallMode`, `BeforeCallEvent`, `PreparedCallEvent`, `AfterCallEvent`, `CallOutcome`, `OutcomeKind` |
+| Calls | `CallMode`, `BeforeCallEvent`, `PreparedCallEvent`, `PreparationFailedEvent`, `AfterCallEvent`, `CallOutcome`, `OutcomeKind` |
 | Contributions | `CallContribution`, `ArgumentAddition`, `AdditionPlacement` |
 | Argument metadata | `ArgumentRegistry`, `OptionSpec` |
 | Completion | `Shell`, `CompletionContext`, `CompletionCandidate`, `CandidateLike`, `CompletionPredicate`, `CompletionCallable`, `CompletionProvider`, `CompletionRegistry`, `invoke_provider`, `normalize_candidate` |

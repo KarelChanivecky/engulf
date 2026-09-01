@@ -153,6 +153,7 @@ class RecordingPlugin(ExecutableWrapperPlugin):
         help_text: str = "",
         before=None,
         prepare=None,
+        prepare_failure=None,
         after=None,
     ) -> None:
         self.plugin_id = plugin_id or f"tests.wrapper.plugin{next(_plugin_ids)}"
@@ -160,9 +161,11 @@ class RecordingPlugin(ExecutableWrapperPlugin):
         self.help_text = help_text
         self.before_action = before
         self.prepare_action = prepare
+        self.prepare_failure_action = prepare_failure
         self.after_action = after
         self.before_events = []
         self.prepare_events = []
+        self.prepare_failed_events = []
         self.after_events = []
 
     def help(self, api) -> str:
@@ -181,6 +184,11 @@ class RecordingPlugin(ExecutableWrapperPlugin):
         self.prepare_events.append(event)
         if self.prepare_action is not None:
             self.prepare_action(event, api)
+
+    def prepare_failed(self, event, api) -> None:
+        self.prepare_failed_events.append(event)
+        if self.prepare_failure_action is not None:
+            self.prepare_failure_action(event, api)
 
     def after_call(self, event, api) -> None:
         self.after_events.append(event)
@@ -873,27 +881,128 @@ class ExecutableWrapperGoalTestCase(unittest.TestCase):
         self.assertEqual(len(second.after_events), 0)
         self.assertFalse(self.record.exists())
 
-    def test_prepare_exception_emits_framework_failure_to_finalizers(self) -> None:
+    def test_prepare_exception_unwinds_only_the_plugins_that_prepared(self) -> None:
         def fail(event, api) -> None:
             raise RuntimeError("prepare failed")
 
-        first = RecordingPlugin(prepare=fail)
-        second = RecordingPlugin()
+        first = RecordingPlugin(plugin_id="tests.wrapper.first", priority=100)
+        second = RecordingPlugin(plugin_id="tests.wrapper.second", priority=90)
+        failing = RecordingPlugin(
+            plugin_id="tests.wrapper.failing",
+            priority=80,
+            prepare=fail,
+        )
+        never = RecordingPlugin(plugin_id="tests.wrapper.never", priority=70)
+        application = self.make_application(first, second, failing, never)
 
         with contextlib.redirect_stderr(io.StringIO()):
-            result = self.make_application(first, second).run([])
+            result = application.run(["--flag"])
 
         self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
-        self.assertEqual(len(first.prepare_events), 1)
-        self.assertEqual(len(second.prepare_events), 0)
-        self.assertEqual(len(first.after_events), 1)
-        self.assertEqual(len(second.after_events), 1)
-        for plugin in (first, second):
-            outcome = plugin.after_events[0].outcome
-            self.assertEqual(outcome.kind, OutcomeKind.FRAMEWORK_FAILED)
-            self.assertEqual(outcome.exit_code, FRAMEWORK_ERROR_EXIT)
-            self.assertFalse(outcome.process_started)
-            self.assertIn("prepare failed", outcome.error or "")
+        self.assertEqual(len(failing.prepare_events), 1)
+        self.assertEqual(len(never.prepare_events), 0)
+        self.assertEqual(len(first.prepare_failed_events), 1)
+        self.assertEqual(len(second.prepare_failed_events), 1)
+        self.assertEqual(failing.prepare_failed_events, [])
+        self.assertEqual(never.prepare_failed_events, [])
+        for plugin in (first, second, failing, never):
+            self.assertEqual(plugin.after_events, [])
+        event = first.prepare_failed_events[0]
+        self.assertEqual(event.binary, str(self.binary))
+        self.assertEqual(event.wrapper_args, ("--flag",))
+        self.assertEqual(event.effective_args, ("--flag",))
+        self.assertEqual(event.mode, CallMode.NORMAL)
+        self.assertEqual(event.failed_plugin_id, "tests.wrapper.failing")
+        self.assertIn("prepare failed", event.error)
+        self.assertFalse(self.record.exists())
+
+    def test_preparation_unwind_runs_in_reverse_preparation_order(self) -> None:
+        order: list[str] = []
+
+        def fail(event, api) -> None:
+            raise RuntimeError("prepare failed")
+
+        plugins = [
+            RecordingPlugin(
+                plugin_id=f"tests.wrapper.step{index}",
+                priority=100 - index,
+                prepare=lambda event, api, name=f"step{index}": order.append(
+                    f"prepare:{name}"
+                ),
+                prepare_failure=lambda event, api, name=f"step{index}": order.append(
+                    f"unwind:{name}"
+                ),
+            )
+            for index in range(3)
+        ]
+        failing = RecordingPlugin(
+            plugin_id="tests.wrapper.step9",
+            priority=10,
+            prepare=fail,
+        )
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            result = self.make_application(*plugins, failing).run([])
+
+        self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
+        self.assertEqual(
+            order,
+            [
+                "prepare:step0",
+                "prepare:step1",
+                "prepare:step2",
+                "unwind:step2",
+                "unwind:step1",
+                "unwind:step0",
+            ],
+        )
+
+    def test_failing_cleanup_does_not_stop_the_remaining_unwind(self) -> None:
+        def fail_prepare(event, api) -> None:
+            raise RuntimeError("prepare failed")
+
+        def fail_cleanup(event, api) -> None:
+            raise RuntimeError("cleanup failed")
+
+        first = RecordingPlugin(plugin_id="tests.wrapper.first", priority=100)
+        failing_cleanup = RecordingPlugin(
+            plugin_id="tests.wrapper.cleanup",
+            priority=90,
+            prepare_failure=fail_cleanup,
+        )
+        failing_prepare = RecordingPlugin(
+            plugin_id="tests.wrapper.failing",
+            priority=80,
+            prepare=fail_prepare,
+        )
+        application = self.make_application(first, failing_cleanup, failing_prepare)
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = application.run([])
+
+        self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
+        self.assertEqual(len(failing_cleanup.prepare_failed_events), 1)
+        self.assertEqual(len(first.prepare_failed_events), 1)
+        self.assertIn("cleanup failed", stderr.getvalue())
+        self.assertIn("prepare failed", stderr.getvalue())
+
+    def test_first_preparer_failure_unwinds_nobody_and_skips_after_call(self) -> None:
+        def fail(event, api) -> None:
+            raise RuntimeError("prepare failed")
+
+        failing = RecordingPlugin(priority=100, prepare=fail)
+        later = RecordingPlugin(priority=90)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            result = self.make_application(failing, later).run([])
+
+        self.assertEqual(result, FRAMEWORK_ERROR_EXIT)
+        self.assertEqual(len(later.prepare_events), 0)
+        self.assertEqual(failing.prepare_failed_events, [])
+        self.assertEqual(later.prepare_failed_events, [])
+        self.assertEqual(failing.after_events, [])
+        self.assertEqual(later.after_events, [])
         self.assertFalse(self.record.exists())
 
     def test_after_exception_stops_after_phase_and_returns_70(self) -> None:

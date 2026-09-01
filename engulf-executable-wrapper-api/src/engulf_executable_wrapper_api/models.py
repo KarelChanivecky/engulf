@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 
-from engulf_api import validate_exit_code
+from engulf_api import validate_exit_code, validate_global_identifier
 
 
 class CallMode(StrEnum):
@@ -62,6 +62,28 @@ class PreparedCallEvent:
     environment: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "environment", _environment(self.environment))
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationFailedEvent:
+    """Sent to every plugin that completed preparation when a later one failed."""
+
+    binary: str
+    wrapper_args: tuple[str, ...]
+    effective_args: tuple[str, ...]
+    mode: CallMode
+    error: str
+    failed_plugin_id: str | None = None
+    environment: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, CallMode):
+            raise TypeError("mode must be a CallMode")
+        if not isinstance(self.error, str):
+            raise TypeError("error must be a string")
+        if self.failed_plugin_id is not None:
+            validate_global_identifier(self.failed_plugin_id, label="failed_plugin_id")
         object.__setattr__(self, "environment", _environment(self.environment))
 
 

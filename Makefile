@@ -13,7 +13,7 @@ dir_of = $(or $(DIR_$1),$1)
 
 INSTALL_PYTHON ?= python3.14
 
-.PHONY: all environment clean-dist build publish install test-repository
+.PHONY: all environment clean-dist check-packaging build publish install test-repository
 
 # Default target: build everything, then upload whatever was not published yet.
 all: build publish
@@ -31,7 +31,14 @@ environment:
 clean-dist:
 	rm -rf -- dist
 
-build: $(PACKAGES:%=dist/%/.built)
+# Every plugin dependency declared in packaging metadata must come from a
+# distribution the project requires. Resolving that needs the dependency wheels
+# installed, so this runs here and not in an isolated wheel build.
+check-packaging:
+	@PYTHONPATH=engulf-api/src:engulf/src $(PYTHON) -m engulf.packaging_check \
+		$(foreach package,$(PACKAGES),$(call dir_of,$(package)))
+
+build: check-packaging $(PACKAGES:%=dist/%/.built)
 
 publish: $(PACKAGES:%=publish-%)
 

@@ -199,6 +199,7 @@ class GoalPhase[PluginT, EventT, PhaseAPIT, ContributionT]:
     order: PluginOrder
     local_callback: Callable[[PluginT, EventT, PhaseAPIT], ContributionT | None]
     contribution_type: type[ContributionT] | None = None
+    isolate_failures: bool = False
 
     def __post_init__(self) -> None:
         validate_global_identifier(self.phase_id, label="phase_id")
@@ -210,6 +211,8 @@ class GoalPhase[PluginT, EventT, PhaseAPIT, ContributionT]:
             self.contribution_type, type
         ):
             raise TypeError("contribution_type must be a type or None")
+        if type(self.isolate_failures) is not bool:
+            raise TypeError("isolate_failures must be a boolean")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

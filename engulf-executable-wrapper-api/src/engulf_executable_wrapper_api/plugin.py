@@ -14,6 +14,7 @@ from .models import (
     AfterCallEvent,
     BeforeCallEvent,
     CallContribution,
+    PreparationFailedEvent,
     PreparedCallEvent,
 )
 from .registry import ArgumentRegistry, CompletionRegistry
@@ -67,6 +68,13 @@ class ExecutableWrapperPlugin(Plugin, ABC):
         api: InvocationAPI,
     ) -> None:
         """Prepare external resources after edits and vetoes are resolved."""
+
+    def prepare_failed(
+        self,
+        event: PreparationFailedEvent,
+        api: InvocationAPI,
+    ) -> None:
+        """Release what this plugin prepared when preparation failed elsewhere."""
 
     def after_call(
         self,

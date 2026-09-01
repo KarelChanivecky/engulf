@@ -225,6 +225,32 @@ immutable; the runtime validates the declared contribution type.
 Only two dependency orders exist: `PREPROCESS` and `POSTPROCESS`. Each goal phase
 selects one. Setup phases normally use preprocessing order.
 
+A phase stops at the first failing plugin by default, and the failure reaches the
+goal as `PluginCallbackError`. It names the failing `plugin_id`, the `phase`, the
+original `error`, and `completed_plugin_ids`: the plugins that completed that phase
+before the failure, in the order they ran. Use it to address exactly the plugins
+whose callback finished.
+
+Set `isolate_failures=True` on a phase whose callbacks must all run even when one
+raises, such as a phase that releases what an earlier phase acquired. Every selected
+plugin is then called, each failure is reported to diagnostics, and dispatch returns
+the contributions of the plugins that succeeded instead of raising.
+
+Pass `plugin_ids` to `GoalAPI.dispatch()` to call exactly those active plugins in the
+given order rather than the phase's shared order:
+
+```python
+api.dispatch(
+    UNWIND,
+    failure_event,
+    plugin_ids=tuple(reversed(error.completed_plugin_ids)),
+)
+```
+
+An inactive or repeated ID is a goal error. Use the selection only for a subset
+established earlier in the same invocation; ordinary phases dispatch to every active
+plugin.
+
 `phase_id` is the stable routing identity and must remain unique within the goal
 contract. `local_callback` is the in-process adapter for that phase, not its
 identity. Keep the adapter module-level, deterministic, and limited to forwarding to
@@ -238,29 +264,32 @@ or that arbitrary existing phases can automatically run out of process.
 
 ## Dependencies And Priority
 
-`PluginDependency` is a hard active-plugin dependency with independent ordering:
+`PluginDependency` is a hard active-plugin dependency with independent ordering.
+Plugins do not declare it in code: a runtime reads each plugin's dependencies from
+its packaging metadata and merges them into `PluginMetadata.plugin_dependencies`.
+`engulf/README.md` documents the entry-point group that carries the declaration.
 
 ```python
 from engulf_api import DependencyPosition, PluginDependency
 
-plugin_dependencies = (
-    PluginDependency(
-        "com.example.report.source",
-        preprocess=DependencyPosition.BEFORE,
-        postprocess=DependencyPosition.AFTER,
-    ),
+PluginDependency(
+    "com.example.report.source",
+    DependencyPosition.BEFORE,
+    DependencyPosition.AFTER,
 )
 ```
 
-Dependencies do not activate packages. If policy leaves a required plugin inactive,
-application construction fails. Priority defaults to 50 and only breaks ties among
-plugins currently ready in the dependency graph; higher values run first.
+Both positions are required, and at least one must order the dependency. A
+dependency with no edge in either order is rejected, because it declares an ordering
+relationship that changes nothing. Either single position may be `None` to omit that
+one order's edge while keeping the hard presence requirement in both.
 
-The default dependency is middleware-shaped: the dependency is `BEFORE` its
-dependent in preprocessing and `AFTER` it in postprocessing. Either position may be
-`None` to omit that phase's ordering edge while retaining the hard presence
-requirement. Dependency metadata is separate from wheel installation dependencies
-and from context access declarations.
+A middleware-shaped dependency is `BEFORE` its dependent in preprocessing and
+`AFTER` it in postprocessing. Dependencies do not activate packages. If policy
+leaves a required plugin inactive, application construction fails. Priority defaults
+to 50 and only breaks ties among plugins currently ready in the dependency graph;
+higher values run first. Dependency metadata is separate from context access
+declarations.
 
 ## Managed Invocation API
 
@@ -484,6 +513,7 @@ ordering, attribution, state, and policy.
 | `ContextAccessError` | A plugin attempted an undeclared context read or write. |
 | `MissingContextError` | `require_context()` found no value. |
 | `PluginPhaseError` | A callback-bound API, logger, state handle, or lock context was used outside its valid callback. |
+| `PluginCallbackError` | One plugin callback failed in a lifecycle hook or goal phase. Carries `plugin_id`, `phase`, the original `error`, and `completed_plugin_ids`. |
 | `LockTimeoutError` | A state transaction or resource lease missed its one deadline. |
 | `StateCatalogError` | Centrally managed workspace metadata or protected state layout was invalid. |
 | `UnusedContextWarning` | One or more written context IDs were never read. |
@@ -508,7 +538,7 @@ The top-level package exports these supported names, grouped by responsibility:
 | Managed callback APIs | `DiagnosticsAPI`, `RegistrationAPI`, `GoalSetupAPI`, `InvocationAPI`, `BeforeGoalAPI`, `AfterGoalAPI`, `GoalAPI`, `PluginLogger` |
 | State | `StateScope`, `StateStore`, `WorkspaceState` |
 | Diagnostics | `DiagnosticPlugin`, `DiagnosticRequest`, `DiagnosticAPI`, `DiagnosticContribution`, `DiagnosticExtension`, `PluginExecutionRecord` |
-| Errors and validation | `ContextAccessError`, `MissingContextError`, `PluginPhaseError`, `LockTimeoutError`, `StateCatalogError`, `UnusedContextWarning`, `validate_global_identifier`, `validate_exit_code` |
+| Errors and validation | `ContextAccessError`, `MissingContextError`, `PluginPhaseError`, `PluginCallbackError`, `LockTimeoutError`, `StateCatalogError`, `UnusedContextWarning`, `validate_global_identifier`, `validate_exit_code` |
 
 ## Packaging A Goal API
 

@@ -22,6 +22,8 @@ from .plugin_loader import (
     PluginRequirementError,
     application_plugin_entry_point_group,
     goal_plugin_entry_point_group,
+    parse_plugin_dependency,
+    plugin_dependency_entry_point_group,
 )
 from .state import (
     StateHomeContext,
@@ -58,4 +60,6 @@ __all__ = [
     "diagnostic_trigger_entry_point_group",
     "goal_plugin_entry_point_group",
     "logging_option_names",
+    "parse_plugin_dependency",
+    "plugin_dependency_entry_point_group",
 ]

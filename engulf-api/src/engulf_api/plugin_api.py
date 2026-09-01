@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from contextlib import AbstractContextManager
 from typing import Literal, TypeVar, overload
 
@@ -137,5 +137,13 @@ class GoalAPI(InvocationAPI):
         self,
         phase: GoalPhase[PluginT, EventT, InvocationAPI, ContributionT],
         event: EventT,
+        *,
+        plugin_ids: Sequence[str] | None = None,
     ) -> tuple[AttributedContribution[ContributionT], ...]:
-        """Call all goal plugins in the phase's declared order."""
+        """Call goal plugins in the phase's declared order.
+
+        Pass `plugin_ids` to call exactly those active plugins, in the given
+        order, instead of the phase's shared order. Use it for phases that must
+        address a subset established earlier in the same invocation, such as
+        unwinding the plugins that completed an earlier phase.
+        """

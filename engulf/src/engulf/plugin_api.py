@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, Literal, overload
 
@@ -31,7 +31,7 @@ from .state import InvocationStateManager
 __all__ = ["InvocationContextTable", "RuntimeGoalAPI", "RuntimePluginAPI"]
 
 type _Dispatch = Callable[
-    [GoalPhase[Any, Any, InvocationAPI, Any], Any],
+    [GoalPhase[Any, Any, InvocationAPI, Any], Any, Sequence[str] | None],
     tuple[AttributedContribution[Any], ...],
 ]
 
@@ -160,8 +160,16 @@ class RuntimeGoalAPI(RuntimePluginAPI, GoalAPI):
         self,
         phase: GoalPhase[Any, Any, InvocationAPI, Any],
         event: Any,
+        *,
+        plugin_ids: Sequence[str] | None = None,
     ) -> tuple[AttributedContribution[Any], ...]:
         self._require_active("dispatch")
         if not isinstance(phase, GoalPhase):
             raise TypeError("phase must be a GoalPhase")
-        return self._dispatch(phase, event)
+        if plugin_ids is not None:
+            if isinstance(plugin_ids, str) or not all(
+                isinstance(plugin_id, str) for plugin_id in plugin_ids
+            ):
+                raise TypeError("plugin_ids must be a sequence of plugin IDs")
+            plugin_ids = tuple(plugin_ids)
+        return self._dispatch(phase, event, plugin_ids)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -13,6 +13,7 @@ from engulf_api import (
     GoalSetupAPI,
     Invocation,
     InvocationAPI,
+    PluginCallbackError,
     PluginLogger,
     PluginOrder,
     RegistrationAPI,
@@ -30,14 +31,6 @@ type _SetupDispatch = Callable[
     [GoalPhase[Any, Any, RegistrationAPI, Any], Any],
     tuple[AttributedContribution[Any], ...],
 ]
-
-
-class _PluginCallbackError(RuntimeError):
-    def __init__(self, plugin_id: str, phase: str, error: Exception) -> None:
-        super().__init__(f"plugin {plugin_id} failed in {phase}: {error}")
-        self.plugin_id = plugin_id
-        self.phase = phase
-        self.error = error
 
 
 class _RuntimeGoalSetupAPI(GoalSetupAPI):
@@ -138,7 +131,7 @@ class _HookRunner:
             except Exception as error:  # noqa: BLE001 - isolate extension failures.
                 _report_plugin_error(
                     diagnostics,
-                    _PluginCallbackError(item.plugin_id, "before_goal", error),
+                    PluginCallbackError(item.plugin_id, "before_goal", error),
                 )
                 return GoalResult.framework_failed(error=str(error))
             finally:
@@ -174,7 +167,7 @@ class _HookRunner:
             except Exception as error:  # noqa: BLE001 - isolate extension failures.
                 _report_plugin_error(
                     diagnostics,
-                    _PluginCallbackError(item.plugin_id, "after_goal", error),
+                    PluginCallbackError(item.plugin_id, "after_goal", error),
                 )
                 return GoalResult.framework_failed(error=str(error))
             finally:
@@ -200,47 +193,75 @@ class _PhaseDispatcher:
         apis: dict[str, RuntimeDiagnosticsAPI],
         diagnostics: DiagnosticsSession,
     ) -> tuple[AttributedContribution[Any], ...]:
-        contributions: list[AttributedContribution[Any]] = []
-        for item in self._order_for(phase.order):
-            api = apis[item.plugin_id]
-            api.activate(phase.phase_id)
-            try:
-                value = item.endpoint.dispatch_phase(phase, event, api)
-                _append_contribution(phase, item, value, contributions)
-            except Exception as error:
-                callback_error = _PluginCallbackError(
-                    item.plugin_id,
-                    phase.phase_id,
-                    error,
-                )
-                _report_plugin_error(diagnostics, callback_error)
-                raise callback_error from error
-            finally:
-                api.deactivate()
-        return tuple(contributions)
+        return self._dispatch(phase, event, apis, diagnostics)
 
     def dispatch_invocation(
         self,
         phase: GoalPhase[Any, Any, InvocationAPI, Any],
         event: Any,
         apis: dict[str, RuntimePluginAPI],
+        diagnostics: DiagnosticsSession,
+        plugin_ids: Sequence[str] | None = None,
     ) -> tuple[AttributedContribution[Any], ...]:
+        return self._dispatch(phase, event, apis, diagnostics, plugin_ids)
+
+    def _dispatch(
+        self,
+        phase: GoalPhase[Any, Any, Any, Any],
+        event: Any,
+        apis: Mapping[str, Any],
+        diagnostics: DiagnosticsSession,
+        plugin_ids: Sequence[str] | None = None,
+    ) -> tuple[AttributedContribution[Any], ...]:
+        """Run one phase, isolating plugin failures only when the phase asks."""
         contributions: list[AttributedContribution[Any]] = []
-        for item in self._order_for(phase.order):
+        completed: list[str] = []
+        for item in self._selection(phase, plugin_ids):
             api = apis[item.plugin_id]
             api.activate(phase.phase_id)
             try:
                 value = item.endpoint.dispatch_phase(phase, event, api)
                 _append_contribution(phase, item, value, contributions)
             except Exception as error:
-                raise _PluginCallbackError(
+                callback_error = PluginCallbackError(
                     item.plugin_id,
                     phase.phase_id,
                     error,
-                ) from error
+                    completed_plugin_ids=tuple(completed),
+                )
+                _report_plugin_error(diagnostics, callback_error)
+                if not phase.isolate_failures:
+                    raise callback_error from error
+            else:
+                completed.append(item.plugin_id)
             finally:
                 api.deactivate()
         return tuple(contributions)
+
+    def _selection(
+        self,
+        phase: GoalPhase[Any, Any, Any, Any],
+        plugin_ids: Sequence[str] | None,
+    ) -> tuple[LoadedPlugin, ...]:
+        order = self._order_for(phase.order)
+        if plugin_ids is None:
+            return order
+        available = {item.plugin_id: item for item in order}
+        selection: list[LoadedPlugin] = []
+        seen: set[str] = set()
+        for plugin_id in plugin_ids:
+            item = available.get(plugin_id)
+            if item is None:
+                raise ValueError(
+                    f"{phase.phase_id} cannot dispatch to inactive plugin {plugin_id}"
+                )
+            if plugin_id in seen:
+                raise ValueError(
+                    f"{phase.phase_id} cannot dispatch to {plugin_id} twice"
+                )
+            seen.add(plugin_id)
+            selection.append(item)
+        return tuple(selection)
 
     def _order_for(self, order: PluginOrder) -> tuple[LoadedPlugin, ...]:
         if order is PluginOrder.PREPROCESS:
@@ -277,7 +298,7 @@ def _require_result(value: object, phase: str) -> GoalResult[Any]:
 
 def _report_plugin_error(
     diagnostics: DiagnosticsSession,
-    error: _PluginCallbackError,
+    error: PluginCallbackError,
 ) -> None:
     diagnostics.failure(
         str(error),

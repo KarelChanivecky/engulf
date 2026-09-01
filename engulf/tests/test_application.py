@@ -23,6 +23,7 @@ from engulf_api import (
     Invocation,
     InvocationAPI,
     Plugin,
+    PluginCallbackError,
     PluginOrder,
     PluginPhaseError,
     RegistrationAPI,
@@ -53,6 +54,8 @@ class ApplicationPlugin(Plugin):
         registration=None,
         before=None,
         after=None,
+        contribute=None,
+        cleanup=None,
     ) -> None:
         self.plugin_id = plugin_id
         self.priority = priority
@@ -61,6 +64,9 @@ class ApplicationPlugin(Plugin):
         self.registration_action = registration
         self.before_action = before
         self.after_action = after
+        self.contribute_action = contribute
+        self.cleanup_action = cleanup
+        self.cleanup_events: list[str] = []
 
     def before_goal(self, invocation, api):
         if self.before_action is None:
@@ -79,7 +85,21 @@ def _contribute(
     api: InvocationAPI,
 ) -> str | None:
     del event, api
+    if plugin.contribute_action is not None:
+        plugin.contribute_action()
     return plugin.contribution
+
+
+def _clean_up(
+    plugin: ApplicationPlugin,
+    event: str,
+    api: InvocationAPI,
+) -> str | None:
+    del api
+    plugin.cleanup_events.append(event)
+    if plugin.cleanup_action is not None:
+        plugin.cleanup_action()
+    return plugin.plugin_id
 
 
 def _register(
@@ -102,6 +122,13 @@ REGISTER = GoalPhase(
     phase_id="tests.application.register",
     order=PluginOrder.PREPROCESS,
     local_callback=_register,
+)
+CLEAN_UP = GoalPhase(
+    phase_id="tests.application.clean-up",
+    order=PluginOrder.POSTPROCESS,
+    local_callback=_clean_up,
+    contribution_type=str,
+    isolate_failures=True,
 )
 
 
@@ -133,6 +160,51 @@ class RecordingGoal(Goal[tuple[tuple[str, str], ...]]):
             for contribution in contributions
         )
         return GoalResult.completed(value)
+
+
+class UnwindingGoal(RecordingGoal):
+    """Dispatches a preprocessing phase and unwinds the plugins that completed."""
+
+    def __init__(self, *, selection: object = "completed") -> None:
+        super().__init__()
+        self.selection = selection
+        self.failure: PluginCallbackError | None = None
+        self.cleanup_contributions: tuple[str, ...] = ()
+
+    def achieve(self, invocation: Invocation, api: GoalAPI):
+        try:
+            api.dispatch(CONTRIBUTE, invocation.arguments)
+        except PluginCallbackError as error:
+            self.failure = error
+            plugin_ids = (
+                tuple(reversed(error.completed_plugin_ids))
+                if self.selection == "completed"
+                else self.selection
+            )
+            contributions = api.dispatch(
+                CLEAN_UP,
+                "unwind",
+                plugin_ids=plugin_ids,
+            )
+            self.cleanup_contributions = tuple(
+                contribution.plugin_id for contribution in contributions
+            )
+            return GoalResult.failed(1, error=str(error.error))
+        return GoalResult.completed(())
+
+
+class IsolatingGoal(RecordingGoal):
+    """Dispatches the isolated cleanup phase to every active plugin."""
+
+    def achieve(self, invocation: Invocation, api: GoalAPI):
+        del invocation
+        contributions = api.dispatch(CLEAN_UP, "isolated")
+        return GoalResult.completed(
+            tuple(
+                (contribution.plugin_id, contribution.value)
+                for contribution in contributions
+            )
+        )
 
 
 class NormalizingGoal(RecordingGoal):
@@ -392,17 +464,16 @@ class ApplicationTestCase(unittest.TestCase):
 
         dependency = ApplicationPlugin(
             "tests.application.dependency",
+            priority=100,
             contribution="dependency",
             after=append("dependency-after"),
         )
-        from engulf_api import PluginDependency
-
         dependent = ApplicationPlugin(
             "tests.application.dependent",
+            priority=50,
             contribution="dependent",
             after=append("dependent-after"),
         )
-        dependent.plugin_dependencies = (PluginDependency(dependency.plugin_id),)
         application = self.make_application(goal, dependent, dependency)
 
         result = application.invoke(())
@@ -412,8 +483,8 @@ class ApplicationTestCase(unittest.TestCase):
             (
                 (dependency.plugin_id, "dependency"),
                 (dependent.plugin_id, "dependent"),
-                ("dependent-after", "dependent-after"),
                 ("dependency-after", "dependency-after"),
+                ("dependent-after", "dependent-after"),
             ),
         )
 
@@ -466,6 +537,112 @@ class ApplicationTestCase(unittest.TestCase):
         self.assertEqual(result.exit_code, FRAMEWORK_ERROR_EXIT)
         self.assertEqual(calls, ["failing.after"])
 
+    def test_isolated_phase_calls_every_plugin_despite_a_failing_callback(
+        self,
+    ) -> None:
+        goal = IsolatingGoal()
+        failing = ApplicationPlugin(
+            "tests.application.isolated_failing",
+            priority=100,
+            cleanup=lambda: (_ for _ in ()).throw(RuntimeError("cleanup failed")),
+        )
+        later = ApplicationPlugin("tests.application.isolated_later")
+        application = self.make_application(goal, later, failing)
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = application.invoke(())
+
+        self.assertIs(result.status, GoalResultStatus.COMPLETED)
+        self.assertEqual(failing.cleanup_events, ["isolated"])
+        self.assertEqual(later.cleanup_events, ["isolated"])
+        self.assertEqual(
+            result.value,
+            (("tests.application.isolated_later", "tests.application.isolated_later"),),
+        )
+        self.assertIn("tests.application.isolated_failing", stderr.getvalue())
+        self.assertIn("cleanup failed", stderr.getvalue())
+
+    def test_phase_failure_reports_the_plugins_that_already_completed(self) -> None:
+        goal = UnwindingGoal()
+        first = ApplicationPlugin(
+            "tests.application.unwind_first",
+            priority=100,
+            contribution="first",
+        )
+        second = ApplicationPlugin(
+            "tests.application.unwind_second",
+            priority=90,
+            contribution="second",
+        )
+        failing = ApplicationPlugin(
+            "tests.application.unwind_failing",
+            priority=80,
+            contribute=lambda: (_ for _ in ()).throw(RuntimeError("phase failed")),
+        )
+        never = ApplicationPlugin(
+            "tests.application.unwind_never",
+            priority=70,
+            contribution="never",
+        )
+        application = self.make_application(goal, first, second, failing, never)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            result = application.invoke(())
+
+        self.assertIs(result.status, GoalResultStatus.FAILED)
+        assert goal.failure is not None
+        self.assertEqual(goal.failure.plugin_id, "tests.application.unwind_failing")
+        self.assertEqual(goal.failure.phase, CONTRIBUTE.phase_id)
+        self.assertEqual(
+            goal.failure.completed_plugin_ids,
+            ("tests.application.unwind_first", "tests.application.unwind_second"),
+        )
+        self.assertEqual(
+            goal.cleanup_contributions,
+            ("tests.application.unwind_second", "tests.application.unwind_first"),
+        )
+        self.assertEqual(first.cleanup_events, ["unwind"])
+        self.assertEqual(second.cleanup_events, ["unwind"])
+        self.assertEqual(failing.cleanup_events, [])
+        self.assertEqual(never.cleanup_events, [])
+
+    def test_selected_dispatch_rejects_inactive_and_repeated_plugin_ids(self) -> None:
+        for selection, message in (
+            (("tests.application.absent",), "inactive plugin"),
+            (
+                (
+                    "tests.application.unwind_first",
+                    "tests.application.unwind_first",
+                ),
+                "twice",
+            ),
+        ):
+            with self.subTest(selection=selection):
+                goal = UnwindingGoal(selection=selection)
+                first = ApplicationPlugin(
+                    "tests.application.unwind_first",
+                    priority=100,
+                    contribution="first",
+                )
+                failing = ApplicationPlugin(
+                    "tests.application.unwind_failing",
+                    priority=80,
+                    contribute=lambda: (_ for _ in ()).throw(
+                        RuntimeError("phase failed")
+                    ),
+                )
+                application = self.make_application(goal, first, failing)
+
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    result = application.invoke(())
+
+                self.assertIs(result.status, GoalResultStatus.FRAMEWORK_FAILED)
+                self.assertEqual(result.exit_code, FRAMEWORK_ERROR_EXIT)
+                self.assertIn(message, stderr.getvalue())
+                self.assertEqual(first.cleanup_events, [])
+
     def test_plugin_descriptors_are_snapshotted_and_application_is_closeable(
         self,
     ) -> None:
@@ -516,20 +693,15 @@ class ApplicationTestCase(unittest.TestCase):
     def test_resolution_failure_closes_all_discovered_execution_endpoints(
         self,
     ) -> None:
-        from engulf_api import PluginDependency
-
-        first = ApplicationPlugin("tests.application.resolution_first")
-        second = ApplicationPlugin("tests.application.resolution_second")
-        second.plugin_dependencies = (
-            PluginDependency("tests.application.resolution_missing"),
-        )
+        first = ApplicationPlugin("tests.application.resolution_duplicate")
+        second = ApplicationPlugin("tests.application.resolution_duplicate")
 
         with (
             patch(
                 "engulf._plugin_execution._InProcessPluginEndpoint.close",
                 autospec=True,
             ) as close,
-            self.assertRaisesRegex(RuntimeError, "requires missing plugin"),
+            self.assertRaisesRegex(RuntimeError, "duplicate plugin_id"),
         ):
             self.make_application(RecordingGoal(), first, second)
 

@@ -15,17 +15,31 @@ class DependencyPosition(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class PluginDependency:
-    """A hard plugin dependency with independent per-phase ordering."""
+    """A hard plugin dependency with independent per-phase ordering.
+
+    Runtimes derive these values from a plugin's packaging metadata; plugins do
+    not declare them in code. Both orders must be stated, and at least one must
+    order the dependency, because a dependency with no edge in either order is
+    an ordering declaration that does nothing.
+    """
 
     plugin_id: str
-    preprocess: DependencyPosition | None = DependencyPosition.BEFORE
-    postprocess: DependencyPosition | None = DependencyPosition.AFTER
+    preprocess: DependencyPosition | None
+    postprocess: DependencyPosition | None
 
     def __post_init__(self) -> None:
-        validate_global_identifier(self.plugin_id, label="dependency plugin_id")
+        plugin_id = validate_global_identifier(
+            self.plugin_id,
+            label="dependency plugin_id",
+        )
         for phase, position in (
             ("preprocess", self.preprocess),
             ("postprocess", self.postprocess),
         ):
             if position is not None and not isinstance(position, DependencyPosition):
                 raise TypeError(f"{phase} must be a DependencyPosition or None")
+        if self.preprocess is None and self.postprocess is None:
+            raise ValueError(
+                f"dependency on {plugin_id!r} must order it in the preprocess or "
+                "the postprocess order"
+            )

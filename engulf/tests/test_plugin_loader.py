@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import tempfile
 import textwrap
@@ -14,6 +16,7 @@ from engulf.plugin_loader import (
     normalize_application_id,
 )
 from engulf_api import (
+    DependencyPosition,
     Goal,
     GoalAPI,
     GoalContract,
@@ -37,6 +40,7 @@ from engulf import (
     diagnostic_entry_point_group,
     diagnostic_trigger_entry_point_group,
     goal_plugin_entry_point_group,
+    plugin_dependency_entry_point_group,
 )
 
 REQUIREMENT = GoalRequirement("tests.loader.goal", 1)
@@ -61,22 +65,21 @@ class LoaderGoal(Goal[tuple[str, ...]]):
 class LoaderPlugin(Plugin):
     goal_requirement = REQUIREMENT
 
-    def __init__(
-        self,
-        plugin_id: str,
-        *,
-        priority: int = 50,
-        dependencies: tuple[PluginDependency, ...] = (),
-    ) -> None:
+    def __init__(self, plugin_id: str, *, priority: int = 50) -> None:
         self.plugin_id = plugin_id
         self.priority = priority
-        self.plugin_dependencies = dependencies
 
 
 class _CountingDistribution:
-    def __init__(self, name: str, version: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        version: str,
+        requires: list[str] | None = None,
+    ) -> None:
         self._name = name
         self._version = version
+        self.requires = requires
         self.name_reads = 0
         self.version_reads = 0
 
@@ -102,7 +105,7 @@ class PluginLoaderTestCase(unittest.TestCase):
         (self.directory / f"{self.module_name}.py").write_text(
             textwrap.dedent(
                 """
-                from engulf_api import GoalRequirement, Plugin, PluginDependency
+                from engulf_api import GoalRequirement, Plugin
 
                 class CatalogPlugin(Plugin):
                     goal_requirement = GoalRequirement("tests.loader.goal", 1)
@@ -116,13 +119,7 @@ class PluginLoaderTestCase(unittest.TestCase):
                 gamma = CatalogPlugin("tests.loader.gamma", 0)
                 transitive = CatalogPlugin("tests.loader.transitive")
                 required = CatalogPlugin("tests.loader.required")
-                required.plugin_dependencies = (
-                    PluginDependency(transitive.plugin_id),
-                )
                 dependent = CatalogPlugin("tests.loader.dependent")
-                dependent.plugin_dependencies = (
-                    PluginDependency(required.plugin_id),
-                )
                 incompatible = CatalogPlugin("tests.loader.incompatible")
                 incompatible.goal_requirement = GoalRequirement("tests.other.goal", 1)
                 """
@@ -198,20 +195,37 @@ class PluginLoaderTestCase(unittest.TestCase):
             application_plugin_entry_point_group(application_id),
         )
 
+    @staticmethod
+    def dependency_entries(
+        plugin_id: str,
+        dependencies: dict[str, str],
+    ) -> tuple[EntryPoint, ...]:
+        group = plugin_dependency_entry_point_group(plugin_id)
+        return tuple(
+            EntryPoint(dependency_id, ordering, group)
+            for dependency_id, ordering in dependencies.items()
+        )
+
     def entries_for(
         self,
         application_id: str,
         *,
         catalog: tuple[EntryPoint, ...],
         declarations: tuple[EntryPoint, ...] = (),
+        dependencies: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, tuple[EntryPoint, ...]]:
-        return {
+        entries = {
             goal_plugin_entry_point_group(
                 REQUIREMENT.goal_id,
                 REQUIREMENT.api_major,
             ): catalog,
             application_plugin_entry_point_group(application_id): declarations,
         }
+        for plugin_id, mapping in (dependencies or {}).items():
+            entries[plugin_dependency_entry_point_group(plugin_id)] = (
+                self.dependency_entries(plugin_id, mapping)
+            )
+        return entries
 
     def test_identifier_and_entry_point_groups_are_stable(self) -> None:
         self.assertEqual(normalize_application_id("Acme.CLI"), "acme-cli")
@@ -517,54 +531,49 @@ class PluginLoaderTestCase(unittest.TestCase):
         )
 
     def test_allowlist_dependency_activation_is_explicit_by_default(self) -> None:
-        required = LoaderPlugin("tests.loader.required")
-        dependent = LoaderPlugin(
-            "tests.loader.dependent",
-            dependencies=(PluginDependency(required.plugin_id),),
-        )
-        with (
-            patch(
-                "engulf.application.load_directory_plugins",
-                return_value=(dependent, required),
-            ),
-            self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"),
-        ):
-            self.make_application(
-                policy=PluginPolicy.allow_only({dependent.plugin_id}),
-                plugin_dir=self.plugin_directory,
-                discover_installed=False,
-            )
-
-    def test_allowlist_can_activate_transitive_dependencies_across_sources(
-        self,
-    ) -> None:
         dependent_id = "tests.loader.dependent"
         required_id = "tests.loader.required"
-        transitive_id = "tests.loader.transitive"
-        local_required = LoaderPlugin(
-            required_id,
-            dependencies=(PluginDependency(transitive_id),),
-        )
         entries = self.entries_for(
             "tests-loader-app",
             catalog=(
                 self.catalog_entry(dependent_id, "dependent"),
-                self.catalog_entry(transitive_id, "transitive"),
+                self.catalog_entry(required_id, "required"),
             ),
+            dependencies={
+                dependent_id: {required_id: "preprocess=before; postprocess=after"}
+            },
         )
 
-        with patch(
-            "engulf.application.load_directory_plugins",
-            return_value=(local_required,),
-        ):
-            application = self.make_application(
-                policy=PluginPolicy.allow_only(
-                    {dependent_id},
-                    include_dependencies=True,
-                ),
+        with self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"):
+            self.make_application(
+                policy=PluginPolicy.allow_only({dependent_id}),
                 entries=entries,
-                plugin_dir=self.plugin_directory,
             )
+
+    def test_allowlist_can_activate_transitive_dependencies(self) -> None:
+        dependent_id = "tests.loader.dependent"
+        required_id = "tests.loader.required"
+        transitive_id = "tests.loader.transitive"
+        entries = self.entries_for(
+            "tests-loader-app",
+            catalog=(
+                self.catalog_entry(dependent_id, "dependent"),
+                self.catalog_entry(required_id, "required"),
+                self.catalog_entry(transitive_id, "transitive"),
+            ),
+            dependencies={
+                dependent_id: {required_id: "preprocess=before; postprocess=after"},
+                required_id: {transitive_id: "preprocess=before; postprocess=after"},
+            },
+        )
+
+        application = self.make_application(
+            policy=PluginPolicy.allow_only(
+                {dependent_id},
+                include_dependencies=True,
+            ),
+            entries=entries,
+        )
 
         self.assertEqual(
             [plugin.plugin_id for plugin in application.plugins],
@@ -572,24 +581,24 @@ class PluginLoaderTestCase(unittest.TestCase):
         )
 
     def test_implicit_allowlist_still_rejects_unavailable_dependencies(self) -> None:
-        dependent = LoaderPlugin(
-            "tests.loader.dependent",
-            dependencies=(PluginDependency("tests.loader.unavailable"),),
+        dependent_id = "tests.loader.dependent"
+        entries = self.entries_for(
+            "tests-loader-app",
+            catalog=(self.catalog_entry(dependent_id, "dependent"),),
+            dependencies={
+                dependent_id: {
+                    "tests.loader.unavailable": "preprocess=before; postprocess=after"
+                }
+            },
         )
-        with (
-            patch(
-                "engulf.application.load_directory_plugins",
-                return_value=(dependent,),
-            ),
-            self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"),
-        ):
+
+        with self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"):
             self.make_application(
                 policy=PluginPolicy.allow_only(
-                    {dependent.plugin_id},
+                    {dependent_id},
                     include_dependencies=True,
                 ),
-                plugin_dir=self.plugin_directory,
-                discover_installed=False,
+                entries=entries,
             )
 
     def test_dependency_activation_policy_validation(self) -> None:
@@ -745,30 +754,221 @@ class PluginLoaderTestCase(unittest.TestCase):
             )
 
     def test_dependency_validation_still_applies_after_policy(self) -> None:
-        required = LoaderPlugin("tests.loader.required")
-        dependent = LoaderPlugin(
-            "tests.loader.dependent",
-            dependencies=(PluginDependency(required.plugin_id),),
+        dependent_id = "tests.loader.dependent"
+        required_id = "tests.loader.required"
+        entries = self.entries_for(
+            "tests-loader-app",
+            catalog=(
+                self.catalog_entry(dependent_id, "dependent"),
+                self.catalog_entry(required_id, "required"),
+            ),
+            declarations=(
+                self.application_entry("tests-loader-app", dependent_id, "dependent"),
+                self.application_entry("tests-loader-app", required_id, "required"),
+            ),
+            dependencies={
+                dependent_id: {required_id: "preprocess=before; postprocess=after"}
+            },
+        )
+
+        with self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"):
+            self.make_application(
+                policy=PluginPolicy.allow_all_except({required_id}),
+                entries=entries,
+            )
+
+    def test_code_declared_dependencies_are_rejected(self) -> None:
+        plugin = LoaderPlugin("tests.loader.legacy")
+        plugin.plugin_dependencies = (  # type: ignore[attr-defined]
+            PluginDependency(
+                "tests.loader.required",
+                DependencyPosition.BEFORE,
+                DependencyPosition.AFTER,
+            ),
         )
         with (
             patch(
                 "engulf.application.load_directory_plugins",
-                return_value=(dependent, required),
+                return_value=(plugin,),
             ),
-            self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"),
+            self.assertRaisesRegex(
+                PluginDependencyError,
+                "declares plugin_dependencies in code",
+            ),
         ):
-            Application(
-                "tests-directory-policy",
-                LoaderGoal(),
-                display_name="loader-app",
-                vendor="Engulf Tests",
-                product="Plugin Loader Tests",
-                short_product_name="Loader",
-                version="0.test",
-                plugin_policy=PluginPolicy.allow_only({dependent.plugin_id}),
+            self.make_application(
                 plugin_dir=self.plugin_directory,
                 discover_installed=False,
             )
+
+    def test_dependency_declarations_are_parsed_and_validated(self) -> None:
+        dependent_id = "tests.loader.dependent"
+        required_id = "tests.loader.required"
+        catalog = (
+            self.catalog_entry(dependent_id, "dependent"),
+            self.catalog_entry(required_id, "required"),
+        )
+        declarations = (
+            self.application_entry("tests-loader-app", dependent_id, "dependent"),
+            self.application_entry("tests-loader-app", required_id, "required"),
+        )
+
+        application = self.make_application(
+            entries=self.entries_for(
+                "tests-loader-app",
+                catalog=catalog,
+                declarations=declarations,
+                dependencies={
+                    dependent_id: {required_id: "preprocess=none; postprocess=before"}
+                },
+            ),
+        )
+        active = {plugin.plugin_id: plugin for plugin in application.plugins}
+        self.assertEqual(
+            active[dependent_id].dependencies,
+            (PluginDependency(required_id, None, DependencyPosition.BEFORE),),
+        )
+        self.assertEqual(active[required_id].dependencies, ())
+
+        for ordering, message in (
+            ("preprocess=none; postprocess=none", "must order it in the preprocess"),
+            ("preprocess=before", "must declare 'postprocess'"),
+            ("before/after", "'<field>=<value>' pairs"),
+            ("preprocess=sideways; postprocess=after", "must be 'before', 'after'"),
+            (
+                "preprocess=before; postprocess=after; version=1",
+                "unknown field 'version'",
+            ),
+            (
+                "preprocess=before; preprocess=after; postprocess=after",
+                "declares 'preprocess' more than once",
+            ),
+        ):
+            with (
+                self.subTest(ordering=ordering),
+                self.assertRaisesRegex(PluginDependencyError, message),
+            ):
+                self.make_application(
+                    entries=self.entries_for(
+                        "tests-loader-app",
+                        catalog=catalog,
+                        declarations=declarations,
+                        dependencies={dependent_id: {required_id: ordering}},
+                    ),
+                )
+
+    def test_repeated_dependency_declarations_are_rejected(self) -> None:
+        dependent_id = "tests.loader.dependent"
+        required_id = "tests.loader.required"
+        group = plugin_dependency_entry_point_group(dependent_id)
+        entries = self.entries_for(
+            "tests-loader-app",
+            catalog=(
+                self.catalog_entry(dependent_id, "dependent"),
+                self.catalog_entry(required_id, "required"),
+            ),
+        )
+        entries[group] = (
+            EntryPoint(required_id, "preprocess=before; postprocess=after", group),
+            EntryPoint(required_id, "preprocess=none; postprocess=after", group),
+        )
+
+        with self.assertRaisesRegex(PluginDependencyError, "more than once"):
+            self.make_application(entries=entries)
+
+    def test_dependency_declarations_must_come_from_the_providing_distribution(
+        self,
+    ) -> None:
+        dependent_id = "tests.loader.dependent"
+        required_id = "tests.loader.required"
+        provider = _CountingDistribution("provider-dist", "1.0")
+        foreign = _CountingDistribution("foreign-dist", "1.0")
+        catalog = (
+            EntryPoint(
+                dependent_id,
+                f"{self.module_name}:dependent",
+                goal_plugin_entry_point_group(
+                    REQUIREMENT.goal_id,
+                    REQUIREMENT.api_major,
+                ),
+            )._for(provider),
+            EntryPoint(
+                required_id,
+                f"{self.module_name}:required",
+                goal_plugin_entry_point_group(
+                    REQUIREMENT.goal_id,
+                    REQUIREMENT.api_major,
+                ),
+            )._for(provider),
+        )
+        group = plugin_dependency_entry_point_group(dependent_id)
+        entries = self.entries_for("tests-loader-app", catalog=catalog)
+        entries[group] = (
+            EntryPoint(required_id, "preprocess=before; postprocess=after", group)._for(
+                foreign
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            PluginLoadError,
+            "does not come from the distribution providing",
+        ):
+            self.make_application(
+                policy=PluginPolicy.allow_all_except(()),
+                entries=entries,
+            )
+
+    def test_dependency_provider_missing_from_requirements_warns_once(self) -> None:
+        dependent_id = "tests.loader.dependent"
+        required_id = "tests.loader.required"
+        catalog_group = goal_plugin_entry_point_group(
+            REQUIREMENT.goal_id,
+            REQUIREMENT.api_major,
+        )
+        dependent_dist = _CountingDistribution("example-audit", "1.0", requires=[])
+        provider_dist = _CountingDistribution("example-schema", "2.0", requires=[])
+        catalog = (
+            EntryPoint(
+                dependent_id,
+                f"{self.module_name}:dependent",
+                catalog_group,
+            )._for(dependent_dist),
+            EntryPoint(
+                required_id,
+                f"{self.module_name}:required",
+                catalog_group,
+            )._for(provider_dist),
+        )
+        group = plugin_dependency_entry_point_group(dependent_id)
+        entries = self.entries_for("tests-loader-app", catalog=catalog)
+        entries[group] = (
+            EntryPoint(required_id, "preprocess=before; postprocess=after", group)._for(
+                dependent_dist
+            ),
+        )
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            application = self.make_application(
+                policy=PluginPolicy.allow_all_except(()),
+                entries=entries,
+            )
+            self.assertEqual(application.run([]), 0)
+        output = stderr.getvalue()
+
+        self.assertIn("example-schema", output)
+        self.assertIn("does not declare in its distribution requirements", output)
+        self.assertEqual(output.count("example-schema"), 1)
+
+        dependent_dist.requires = ["example-schema>=2,<3"]
+        quiet = io.StringIO()
+        with contextlib.redirect_stderr(quiet):
+            satisfied = self.make_application(
+                policy=PluginPolicy.allow_all_except(()),
+                entries=entries,
+            )
+            self.assertEqual(satisfied.run([]), 0)
+        self.assertNotIn("distribution requirements", quiet.getvalue())
 
     def test_public_packages_do_not_export_old_wrapper_contracts(self) -> None:
         self.assertIs(engulf.Application, Application)

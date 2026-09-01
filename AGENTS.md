@@ -135,7 +135,12 @@ immutable contributions and let the goal merge them only after dispatch complete
 Plugins must not observe other plugins' contributions during their callback.
 
 Construct phases with keyword arguments. `phase_id` is the stable dispatch and
-future transport identity; `local_callback` is only the in-process adapter. Keep
+future transport identity; `local_callback` is only the in-process adapter. A phase
+stops at the first failing plugin and reaches the goal as `PluginCallbackError`,
+which names the failing plugin and the plugins that completed the phase before it.
+Reserve `isolate_failures=True` for phases that release earlier work, and
+`dispatch(..., plugin_ids=...)` for addressing exactly a subset established earlier
+in the same invocation. Keep
 that adapter module-level and limited to forwarding into the goal-specific plugin
 contract. Do not place goal logic or captured invocation state in it. Prefer frozen,
 explicitly typed events and contributions so a later goal-owned codec can transport
@@ -182,9 +187,26 @@ An application may activate the goal-catalog entry without this second declarati
 A package spanning unrelated goals exports separate adapters under each goal catalog;
 do not add wildcard goal compatibility.
 
-Wheel dependencies make code installable. `PluginDependency` separately requires an
-adapter to be active and defines independent preprocess/postprocess ordering. Neither
-mechanism replaces the other.
+Declare plugin dependencies once, in packaging metadata, never in code:
+
+```toml
+[project.entry-points."engulf.plugins.v1.dependency.com_example_audit"]
+"com.example.schema" = "preprocess=before; postprocess=after"
+```
+
+The value is `;`-separated `<field>=<value>` pairs. Both `preprocess` and
+`postprocess` are required, each `before`, `after`, or `none`, and at least one order
+must position the dependency. Engulf parses these into
+`PluginDependency` values; a plugin object that sets `plugin_dependencies` in code is
+rejected, and directory plugins have no dependencies at all. Only the distribution
+providing a plugin's catalog entry may declare that plugin's dependencies.
+
+Wheel dependencies still make the code installable, and remain the only place a
+version is pinned. Engulf resolves each dependency plugin ID to its providing
+distribution and warns once when that distribution is missing from the depending
+wheel's requirements; run `engulf-check-packaging <project>` in CI to fail on it
+before shipping. That check needs the dependency wheels installed, so it cannot run
+inside an isolated wheel build.
 
 Use callback `api.logger`; do not attach handlers or change logger levels. Registration
 logging is available after activation because unselected catalog modules are never
@@ -210,11 +232,19 @@ Derive from `ExecutableWrapperPlugin` and keep phases distinct:
 - `analyze_call`: side-effect free; return immutable removals, additions, and optional
   preemption after inspecting original arguments.
 - `prepare_call`: perform viable external work only after all vetoes resolve.
+- `prepare_failed`: release what this plugin prepared when a later preparer raised.
 - `after_call`: finalize in postprocessing order using the complete outcome.
 
 All analyzers see the same original call. Added arguments are hidden until merge.
 Preemption never prevents another analyzer from running, but it prevents every
 preparer from running. Use `preempted_by` as a stable plugin ID.
+
+A failed preparation is not a call. It dispatches `prepare_failed` to exactly the
+plugins that completed `prepare_call`, in reverse preparation order, and never
+dispatches `after_call`. Do not reintroduce a synthetic `FRAMEWORK_FAILED` outcome
+for it, and keep `SPAWN_FAILED` for a prepared call whose process would not start.
+Invocation-scoped cleanup that does not depend on preparation progress belongs in
+`after_goal`.
 
 Keep process execution shell-free, inherit standard streams, preserve controlling
 terminal behavior, and keep the direct child in the wrapper's process group. Forward

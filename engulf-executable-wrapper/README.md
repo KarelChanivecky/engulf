@@ -81,9 +81,11 @@ For each normal invocation, the goal:
 3. validates and merges all argument contributions;
 4. resolves preemption before external preparation;
 5. dispatches `prepare_call` only when execution remains viable;
-6. executes the child while forwarding wrapper signals;
-7. dispatches `after_call` in postprocessing order;
-8. returns a typed outcome to outer `after_goal` middleware.
+6. unwinds preparation with `prepare_failed` if a preparer raises, then propagates
+   the original error;
+7. executes the child while forwarding wrapper signals;
+8. dispatches `after_call` in postprocessing order;
+9. returns a typed outcome to outer `after_goal` middleware.
 
 The child shares the wrapper's existing process group. This preserves controlling
 terminal and shell job-control behavior. While the child is alive, temporary handlers
@@ -111,10 +113,19 @@ The wrapper maps call outcomes to framework results as follows:
 | Lifecycle, phase, validation, or cleanup error | `FRAMEWORK_FAILED` | `70` |
 
 `after_call` runs for preemption, spawn failure, child signal, and normal child exit.
-If preparation raises, the phase stops and `after_call` receives a synthetic
-`FRAMEWORK_FAILED` outcome before the original exception continues to outer lifecycle
-handling. This lets plugins compensate preparation side effects. Analysis errors occur
-before external work is allowed, so they do not create a synthetic after-call outcome.
+It never runs when no call was attempted.
+
+If a plugin's `prepare_call` raises, preparation stops, the executable never starts,
+and the goal dispatches `PreparationFailedEvent` to exactly the plugins whose own
+`prepare_call` already returned, in reverse preparation order. The plugin that raised
+is not called and must unwind its own partial work; plugins that never prepared are
+not called. That phase isolates failures, so a raising `prepare_failed` is reported
+and the remaining plugins still unwind. The original preparation error then continues
+to outer lifecycle handling as a `FRAMEWORK_FAILED` result with exit 70. Failures that
+are not attributed to a plugin callback, such as a `KeyboardInterrupt` inside
+preparation, propagate without the event.
+
+Analysis errors occur before external work is allowed, so they unwind nothing.
 
 ## Help
 

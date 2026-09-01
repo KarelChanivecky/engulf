@@ -25,6 +25,7 @@ from engulf_api import (
     GoalSetupAPI,
     Invocation,
     InvocationAPI,
+    PluginCallbackError,
     PluginOrder,
     RegistrationAPI,
 )
@@ -45,11 +46,12 @@ from engulf_executable_wrapper_api import (
     HelpAPI,
     OptionSpec,
     OutcomeKind,
+    PreparationFailedEvent,
     PreparedCallEvent,
     Shell,
 )
 
-from engulf import FRAMEWORK_ERROR_EXIT, LOG_LEVEL_NAMES, logging_option_names
+from engulf import LOG_LEVEL_NAMES, logging_option_names
 
 _FORWARDED_SIGNALS = (
     signal.SIGHUP,
@@ -113,6 +115,14 @@ def _prepare_call(
     plugin.prepare_call(event, api)
 
 
+def _prepare_failed(
+    plugin: ExecutableWrapperPlugin,
+    event: PreparationFailedEvent,
+    api: InvocationAPI,
+) -> None:
+    plugin.prepare_failed(event, api)
+
+
 def _after_call(
     plugin: ExecutableWrapperPlugin,
     event: AfterCallEvent,
@@ -157,6 +167,14 @@ _PREPARE_CALL: GoalPhase[
     phase_id="org.engulf.executable-wrapper.call.prepare",
     order=PluginOrder.PREPROCESS,
     local_callback=_prepare_call,
+)
+_PREPARE_FAILED: GoalPhase[
+    ExecutableWrapperPlugin, PreparationFailedEvent, InvocationAPI, None
+] = GoalPhase(
+    phase_id="org.engulf.executable-wrapper.call.prepare-failed",
+    order=PluginOrder.POSTPROCESS,
+    local_callback=_prepare_failed,
+    isolate_failures=True,
 )
 _AFTER_CALL: GoalPhase[ExecutableWrapperPlugin, AfterCallEvent, InvocationAPI, None] = (
     GoalPhase(
@@ -375,36 +393,17 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
             duration = 0.0
         else:
             if mode is CallMode.NORMAL:
+                prepared_event = PreparedCallEvent(
+                    self._executable,
+                    wrapper_args,
+                    effective_args,
+                    mode,
+                    invocation.environment,
+                )
                 try:
-                    api.dispatch(
-                        _PREPARE_CALL,
-                        PreparedCallEvent(
-                            self._executable,
-                            wrapper_args,
-                            effective_args,
-                            mode,
-                            invocation.environment,
-                        ),
-                    )
-                except BaseException as error:
-                    outcome = CallOutcome(
-                        OutcomeKind.FRAMEWORK_FAILED,
-                        FRAMEWORK_ERROR_EXIT,
-                        process_started=False,
-                        error=str(error),
-                    )
-                    api.dispatch(
-                        _AFTER_CALL,
-                        AfterCallEvent(
-                            self._executable,
-                            wrapper_args,
-                            effective_args,
-                            mode,
-                            outcome,
-                            0.0,
-                            invocation.environment,
-                        ),
-                    )
+                    api.dispatch(_PREPARE_CALL, prepared_event)
+                except PluginCallbackError as error:
+                    self._unwind_preparation(prepared_event, error, api)
                     raise
             outcome, duration = self._execute(effective_args, api)
 
@@ -434,6 +433,30 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
                 error=outcome.error,
             )
         return GoalResult.completed(outcome, exit_code=outcome.exit_code)
+
+    def _unwind_preparation(
+        self,
+        event: PreparedCallEvent,
+        error: PluginCallbackError,
+        api: GoalAPI,
+    ) -> None:
+        """Let each plugin that finished preparing release what it prepared."""
+        prepared = error.completed_plugin_ids
+        if not prepared:
+            return
+        api.dispatch(
+            _PREPARE_FAILED,
+            PreparationFailedEvent(
+                event.binary,
+                event.wrapper_args,
+                event.effective_args,
+                event.mode,
+                str(error.error),
+                failed_plugin_id=error.plugin_id,
+                environment=event.environment,
+            ),
+            plugin_ids=tuple(reversed(prepared)),
+        )
 
     def _normalize_environment_options(
         self,

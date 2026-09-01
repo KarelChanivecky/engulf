@@ -68,21 +68,38 @@ _MISSING_DISTRIBUTION_IDENTITY = DistributionIdentity(False, None, None, "")
 class EntryPointIndex:
     """One installed entry-point snapshot shared by an application construction."""
 
-    __slots__ = ("_distribution_identities", "_groups")
+    __slots__ = ("_distribution_identities", "_groups", "_prefixes", "_requirements")
 
-    def __init__(self, groups: dict[str, tuple[EntryPoint, ...]]) -> None:
+    def __init__(
+        self,
+        groups: dict[str, tuple[EntryPoint, ...]],
+        prefixes: Iterable[str] = (),
+    ) -> None:
         self._groups = dict(groups)
+        self._prefixes = tuple(dict.fromkeys(prefixes))
         self._distribution_identities: dict[
             int, tuple[Distribution, DistributionIdentity]
         ] = {}
+        self._requirements: dict[int, frozenset[str]] = {}
 
     @classmethod
-    def discover(cls, groups: Iterable[str]) -> EntryPointIndex:
+    def discover(
+        cls,
+        groups: Iterable[str],
+        prefixes: Iterable[str] = (),
+    ) -> EntryPointIndex:
         if isinstance(groups, str):
             raise TypeError("entry-point groups must be an iterable, not a string")
+        if isinstance(prefixes, str):
+            raise TypeError("entry-point prefixes must be an iterable, not a string")
         requested = tuple(dict.fromkeys(groups))
+        requested_prefixes = tuple(dict.fromkeys(prefixes))
         if any(not isinstance(group, str) or not group for group in requested):
             raise ValueError("entry-point groups must be nonempty strings")
+        if any(
+            not isinstance(prefix, str) or not prefix for prefix in requested_prefixes
+        ):
+            raise ValueError("entry-point prefixes must be nonempty strings")
         try:
             discovered = entry_points()
         except Exception as error:
@@ -92,17 +109,48 @@ class EntryPointIndex:
         selected: dict[str, list[EntryPoint]] = {group: [] for group in requested}
         for entry_point in discovered:
             group_entries = selected.get(entry_point.group)
+            if group_entries is None and any(
+                entry_point.group.startswith(prefix) for prefix in requested_prefixes
+            ):
+                group_entries = selected.setdefault(entry_point.group, [])
             if group_entries is not None:
                 group_entries.append(entry_point)
         return cls(
-            {group: tuple(group_entries) for group, group_entries in selected.items()}
+            {group: tuple(group_entries) for group, group_entries in selected.items()},
+            requested_prefixes,
         )
 
     def entries(self, group: str) -> tuple[EntryPoint, ...]:
         try:
             return self._groups[group]
         except KeyError as error:
+            if any(group.startswith(prefix) for prefix in self._prefixes):
+                return ()
             raise ValueError(f"entry-point group was not indexed: {group!r}") from error
+
+    def distribution_requirements(
+        self,
+        entry_point: EntryPoint,
+    ) -> frozenset[str] | None:
+        """Return normalized required distribution names, or None when unknown."""
+        distribution = entry_point.dist
+        if distribution is None:
+            return None
+        key = id(distribution)
+        cached = self._requirements.get(key)
+        if cached is not None:
+            return cached
+        try:
+            requires = distribution.requires or ()
+        except Exception:  # noqa: BLE001 - unreadable metadata is not fatal.
+            requires = ()
+        names = frozenset(
+            _normalize_distribution_name(name)
+            for name in (_requirement_name(item) for item in requires)
+            if name
+        )
+        self._requirements[key] = names
+        return names
 
     def distribution_identity(self, entry_point: EntryPoint) -> DistributionIdentity:
         distribution = entry_point.dist
@@ -242,12 +290,17 @@ class PluginPolicy:
 class PluginDiscovery:
     missing_policy_ids: tuple[str, ...]
     loaded_plugins: tuple[LoadedPlugin, ...]
+    packaging_warnings: tuple[str, ...] = ()
 
     def close(self) -> None:
         """Release every materialized endpoint after abandoned discovery."""
         _close_plugin_endpoints(self.loaded_plugins)
 
 
+_NO_POSITION = "none"
+_DEPENDENCY_FIELDS = ("preprocess", "postprocess")
+_DEPENDENCY_EXAMPLE = "'preprocess=before; postprocess=after'"
+_requirement_name_pattern = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _namespace_counter = itertools.count()
 _missing = object()
 _application_id_pattern = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
@@ -308,6 +361,74 @@ def goal_plugin_entry_point_group(
         raise ValueError("goal API major must be a positive integer")
     normalized = re.sub(r"[-_.]+", "_", validated)
     return f"engulf.plugins.v{PLUGIN_API_MAJOR}.goal.v{goal_api_major}.{normalized}"
+
+
+def plugin_dependency_entry_point_group(plugin_id: str) -> str:
+    """Return the group where one plugin declares its plugin dependencies."""
+    validated = validate_global_identifier(plugin_id, label="plugin_id")
+    normalized = re.sub(r"[-_.]+", "_", validated)
+    return f"engulf.plugins.v{PLUGIN_API_MAJOR}.dependency.{normalized}"
+
+
+def plugin_dependency_entry_point_prefix() -> str:
+    """Return the shared prefix of every plugin-dependency entry-point group."""
+    return f"engulf.plugins.v{PLUGIN_API_MAJOR}.dependency."
+
+
+def parse_plugin_dependency(plugin_id: str, declaration: str) -> PluginDependency:
+    """Build one dependency from an entry-point name and its declared fields."""
+    if not isinstance(declaration, str):
+        raise PluginDependencyError("dependency declaration must be a string")
+    fields = _dependency_fields(plugin_id, declaration)
+    positions: list[DependencyPosition | None] = []
+    for name in _DEPENDENCY_FIELDS:
+        if name not in fields:
+            raise PluginDependencyError(
+                f"dependency on {plugin_id!r} must declare {name!r}; expected "
+                f"{_DEPENDENCY_EXAMPLE}"
+            )
+        value = fields[name]
+        if value == _NO_POSITION:
+            positions.append(None)
+            continue
+        try:
+            positions.append(DependencyPosition(value))
+        except ValueError as error:
+            raise PluginDependencyError(
+                f"{name} position for dependency on {plugin_id!r} must be "
+                f"'before', 'after', or '{_NO_POSITION}', not {value!r}"
+            ) from error
+    try:
+        return PluginDependency(plugin_id, positions[0], positions[1])
+    except (TypeError, ValueError) as error:
+        raise PluginDependencyError(str(error)) from error
+
+
+def _dependency_fields(plugin_id: str, declaration: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for part in declaration.split(";"):
+        field = part.strip()
+        if not field:
+            continue
+        name, separator, value = field.partition("=")
+        name = name.strip()
+        if not separator:
+            raise PluginDependencyError(
+                f"dependency on {plugin_id!r} must declare ';'-separated "
+                f"'<field>=<value>' pairs, not {field!r}; expected "
+                f"{_DEPENDENCY_EXAMPLE}"
+            )
+        if name not in _DEPENDENCY_FIELDS:
+            raise PluginDependencyError(
+                f"dependency on {plugin_id!r} declares unknown field {name!r}; "
+                f"expected {' and '.join(repr(item) for item in _DEPENDENCY_FIELDS)}"
+            )
+        if name in fields:
+            raise PluginDependencyError(
+                f"dependency on {plugin_id!r} declares {name!r} more than once"
+            )
+        fields[name] = value.strip()
+    return fields
 
 
 def resolve_plugin_directory(plugin_dir: str | os.PathLike[str]) -> Path:
@@ -450,7 +571,8 @@ def discover_plugins(
         )
         if entry_point_index is None:
             entry_point_index = EntryPointIndex.discover(
-                (catalog_group, *application_groups)
+                (catalog_group, *application_groups),
+                (plugin_dependency_entry_point_prefix(),),
             )
         catalog_entries = _entry_point_catalog(catalog_group, entry_point_index)
         application_entry_catalogs = [
@@ -458,7 +580,19 @@ def discover_plugins(
             for group in application_groups
         ]
     if entry_point_index is None:
-        entry_point_index = EntryPointIndex({})
+        entry_point_index = EntryPointIndex(
+            {},
+            (plugin_dependency_entry_point_prefix(),),
+        )
+    dependencies_by_id = _collect_plugin_dependencies(
+        catalog_entries,
+        entry_point_index,
+    )
+    packaging_warnings = _packaging_bridge_warnings(
+        catalog_entries,
+        dependencies_by_id,
+        entry_point_index,
+    )
 
     declared_ids: set[str] = set()
     for application_entries in application_entry_catalogs:
@@ -487,24 +621,14 @@ def discover_plugins(
         selected_local_ids = set(local_by_id) - set(policy.plugin_ids)
         selected_catalog_ids = set(catalog_entries) - set(policy.plugin_ids)
 
-    loaded_catalog: dict[str, Plugin] = {}
-    metadata: dict[int, LoadedPlugin] = {}
     if policy.include_dependencies:
-        try:
-            _expand_allowlist_dependencies(
-                contract,
-                local_by_id,
-                catalog_entries,
-                selected_local_ids,
-                selected_catalog_ids,
-                loaded_catalog,
-                metadata,
-                sources,
-                entry_point_index,
-            )
-        except BaseException as discovery_error:
-            _cleanup_discovery_failure(discovery_error, metadata.values())
-            raise
+        _expand_allowlist_dependencies(
+            local_by_id,
+            catalog_entries,
+            dependencies_by_id,
+            selected_local_ids,
+            selected_catalog_ids,
+        )
 
     installed_plugins: list[Plugin] = []
     selected_entries = (
@@ -512,24 +636,20 @@ def discover_plugins(
         for plugin_id in selected_catalog_ids
         if plugin_id in catalog_entries
     )
-    try:
-        for entry_point in sorted(
-            selected_entries,
-            key=lambda item: _entry_point_sort_key(item, entry_point_index),
-        ):
-            installed_plugin = loaded_catalog.get(entry_point.name)
-            if installed_plugin is None:
-                source = _installed_plugin_source(entry_point, entry_point_index)
-                installed_plugin = _load_catalog_plugin(
-                    entry_point,
-                    contract,
-                    entry_point_index,
-                )
-                sources[id(installed_plugin)] = source
-            installed_plugins.append(installed_plugin)
-    except BaseException as discovery_error:
-        _cleanup_discovery_failure(discovery_error, metadata.values())
-        raise
+    for entry_point in sorted(
+        selected_entries,
+        key=lambda item: _entry_point_sort_key(item, entry_point_index),
+    ):
+        installed_plugin = _load_catalog_plugin(
+            entry_point,
+            contract,
+            entry_point_index,
+        )
+        sources[id(installed_plugin)] = _installed_plugin_source(
+            entry_point,
+            entry_point_index,
+        )
+        installed_plugins.append(installed_plugin)
 
     selected_local = tuple(
         plugin for plugin in local_plugins if plugin.plugin_id in selected_local_ids
@@ -544,39 +664,32 @@ def discover_plugins(
     loaded_plugins: list[LoadedPlugin] = []
     try:
         for discovery_index, plugin in enumerate(selected_plugins):
-            snapshot = metadata.get(id(plugin))
-            if snapshot is None:
-                snapshot = _snapshot_plugin(
+            loaded_plugins.append(
+                _snapshot_plugin(
                     plugin,
                     discovery_index,
                     source=sources[id(plugin)],
+                    dependencies=dependencies_by_id.get(plugin.plugin_id, ()),
                 )
-            elif snapshot.discovery_index != discovery_index:
-                snapshot = replace(snapshot, discovery_index=discovery_index)
-            loaded_plugins.append(snapshot)
+            )
     except BaseException as discovery_error:
-        _cleanup_discovery_failure(
-            discovery_error,
-            (*metadata.values(), *loaded_plugins),
-        )
+        _cleanup_discovery_failure(discovery_error, loaded_plugins)
         raise
     return PluginDiscovery(
         missing_policy_ids=missing,
         loaded_plugins=tuple(loaded_plugins),
+        packaging_warnings=packaging_warnings,
     )
 
 
 def _expand_allowlist_dependencies(
-    contract: GoalContract,
     local_by_id: dict[str, list[Plugin]],
     catalog_entries: dict[str, EntryPoint],
+    dependencies_by_id: dict[str, tuple[PluginDependency, ...]],
     selected_local_ids: set[str],
     selected_catalog_ids: set[str],
-    loaded_catalog: dict[str, Plugin],
-    metadata: dict[int, LoadedPlugin],
-    sources: dict[int, PluginSource],
-    entry_point_index: EntryPointIndex,
 ) -> None:
+    """Activate reachable dependencies from packaging metadata, importing nothing."""
     pending = list(selected_local_ids | selected_catalog_ids)
     heapq.heapify(pending)
     expanded: set[str] = set()
@@ -586,39 +699,13 @@ def _expand_allowlist_dependencies(
         if plugin_id in expanded:
             continue
         expanded.add(plugin_id)
-
-        plugins = list(local_by_id.get(plugin_id, ()))
-        entry_point = catalog_entries.get(plugin_id)
-        if entry_point is not None:
-            selected_catalog_ids.add(plugin_id)
-            installed = loaded_catalog.get(plugin_id)
-            if installed is None:
-                source = _installed_plugin_source(entry_point, entry_point_index)
-                installed = _load_catalog_plugin(
-                    entry_point,
-                    contract,
-                    entry_point_index,
-                )
-                loaded_catalog[plugin_id] = installed
-                sources[id(installed)] = source
-            plugins.append(installed)
         if plugin_id in local_by_id:
             selected_local_ids.add(plugin_id)
-
-        for plugin in plugins:
-            snapshot = metadata.get(id(plugin))
-            if snapshot is None:
-                snapshot = _snapshot_plugin(plugin, 0, source=sources[id(plugin)])
-                metadata[id(plugin)] = snapshot
-            for dependency in snapshot.dependencies:
-                dependency_id = dependency.plugin_id
-                if dependency_id in expanded:
-                    continue
-                if dependency_id in local_by_id:
-                    selected_local_ids.add(dependency_id)
-                if dependency_id in catalog_entries:
-                    selected_catalog_ids.add(dependency_id)
-                heapq.heappush(pending, dependency_id)
+        if plugin_id in catalog_entries:
+            selected_catalog_ids.add(plugin_id)
+        for dependency in dependencies_by_id.get(plugin_id, ()):
+            if dependency.plugin_id not in expanded:
+                heapq.heappush(pending, dependency.plugin_id)
 
 
 def _load_catalog_plugin(
@@ -801,8 +888,15 @@ def _snapshot_plugin(
     discovery_index: int,
     *,
     source: PluginSource,
+    dependencies: tuple[PluginDependency, ...] = (),
 ) -> LoadedPlugin:
     name = plugin_name(plugin)
+    if getattr(plugin, "plugin_dependencies", None):
+        raise PluginDependencyError(
+            f"plugin {name} declares plugin_dependencies in code; declare plugin "
+            "dependencies in the engulf.plugins.v1.dependency.<plugin_id> "
+            "entry-point group of its distribution instead"
+        )
     try:
         metadata = plugin.metadata
     except Exception as error:
@@ -813,6 +907,8 @@ def _snapshot_plugin(
         raise PluginDependencyError(
             f"metadata for plugin {name} must be a PluginMetadata"
         )
+    if dependencies:
+        metadata = replace(metadata, plugin_dependencies=dependencies)
     return LoadedPlugin(
         metadata=metadata,
         source=source,
@@ -906,6 +1002,11 @@ def _find_cycle(
             if cycle is not None:
                 return cycle
     raise AssertionError("cyclic graph did not contain a discoverable cycle")
+
+
+def _requirement_name(requirement: str) -> str:
+    match = _requirement_name_pattern.match(requirement)
+    return "" if match is None else match.group(1)
 
 
 def _entry_point_sort_key(
@@ -1004,6 +1105,14 @@ def _same_entry_point_source(
 ) -> bool:
     if left.value != right.value:
         return False
+    return _same_distribution(left, right, entry_point_index)
+
+
+def _same_distribution(
+    left: EntryPoint,
+    right: EntryPoint,
+    entry_point_index: EntryPointIndex,
+) -> bool:
     left_distribution = entry_point_index.distribution_identity(left)
     right_distribution = entry_point_index.distribution_identity(right)
     if not left_distribution.present or not right_distribution.present:
@@ -1012,6 +1121,81 @@ def _same_entry_point_source(
         left_distribution.normalized_name == right_distribution.normalized_name
         and left_distribution.version == right_distribution.version
     )
+
+
+def _collect_plugin_dependencies(
+    catalog_entries: dict[str, EntryPoint],
+    entry_point_index: EntryPointIndex,
+) -> dict[str, tuple[PluginDependency, ...]]:
+    """Read every cataloged plugin's dependencies from its packaging metadata."""
+    collected: dict[str, tuple[PluginDependency, ...]] = {}
+    for plugin_id, catalog in catalog_entries.items():
+        group = plugin_dependency_entry_point_group(plugin_id)
+        dependencies: list[PluginDependency] = []
+        seen: set[str] = set()
+        for entry_point in sorted(
+            entry_point_index.entries(group),
+            key=lambda item: _entry_point_sort_key(item, entry_point_index),
+        ):
+            if not _same_distribution(entry_point, catalog, entry_point_index):
+                raise PluginLoadError(
+                    f"plugin dependency declaration {entry_point.name!r} in group "
+                    f"{group!r} does not come from the distribution providing "
+                    f"plugin {plugin_id!r}"
+                )
+            try:
+                dependency_id = validate_global_identifier(
+                    entry_point.name,
+                    label=f"entry-point name in {group!r}",
+                )
+            except (TypeError, ValueError) as error:
+                raise PluginDependencyError(str(error)) from error
+            if dependency_id in seen:
+                raise PluginDependencyError(
+                    f"plugin {plugin_id!r} declares dependency {dependency_id!r} "
+                    "more than once"
+                )
+            seen.add(dependency_id)
+            dependencies.append(
+                parse_plugin_dependency(dependency_id, entry_point.value)
+            )
+        collected[plugin_id] = tuple(dependencies)
+    return collected
+
+
+def _packaging_bridge_warnings(
+    catalog_entries: dict[str, EntryPoint],
+    dependencies_by_id: dict[str, tuple[PluginDependency, ...]],
+    entry_point_index: EntryPointIndex,
+) -> tuple[str, ...]:
+    """Report plugin dependencies whose provider is not a distribution requirement."""
+    warnings: list[str] = []
+    for plugin_id, dependencies in dependencies_by_id.items():
+        catalog = catalog_entries.get(plugin_id)
+        if catalog is None:
+            continue
+        requirements = entry_point_index.distribution_requirements(catalog)
+        if requirements is None:
+            continue
+        identity = entry_point_index.distribution_identity(catalog)
+        for dependency in dependencies:
+            provider = catalog_entries.get(dependency.plugin_id)
+            if provider is None:
+                continue
+            provider_identity = entry_point_index.distribution_identity(provider)
+            if not provider_identity.present or provider_identity.name is None:
+                continue
+            if provider_identity.normalized_name == identity.normalized_name:
+                continue
+            if provider_identity.normalized_name in requirements:
+                continue
+            warnings.append(
+                f"plugin {plugin_id!r} depends on plugin {dependency.plugin_id!r} "
+                f"provided by distribution {provider_identity.name!r}, which "
+                f"{identity.name or 'its distribution'!r} does not declare in its "
+                "distribution requirements"
+            )
+    return tuple(warnings)
 
 
 def _validate_goal_compatibility(

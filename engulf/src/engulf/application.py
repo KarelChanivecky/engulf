@@ -21,6 +21,7 @@ from engulf_api import (
     Invocation,
     InvocationAPI,
     Plugin,
+    PluginCallbackError,
     PluginExecutionRecord,
     RegistrationAPI,
     UnusedContextWarning,
@@ -29,8 +30,6 @@ from engulf_api import (
 from ._dispatch import (
     _HookRunner,
     _PhaseDispatcher,
-    _PluginCallbackError,
-    _report_plugin_error,
     _require_result,
     _RuntimeGoalSetupAPI,
 )
@@ -70,6 +69,7 @@ from .plugin_loader import (
     load_directory_plugins,
     normalize_application_id,
     normalize_plugin_declaration_application_ids,
+    plugin_dependency_entry_point_prefix,
     resolve_discovered_plugin_orders,
     resolve_plugin_directory,
     validate_goal_plugins,
@@ -200,7 +200,8 @@ class Application[ResultT]:
                         contract.goal_id,
                         contract.api_major,
                     ),
-                )
+                ),
+                (plugin_dependency_entry_point_prefix(),),
             )
         discovery = discover_plugins(
             self._application_id,
@@ -238,6 +239,7 @@ class Application[ResultT]:
             for plugin_id in discovery.missing_policy_ids
             if plugin_id not in required_ids
         )
+        self._packaging_warnings = discovery.packaging_warnings
         self._preprocess_order = orders.preprocess
         self._postprocess_order = orders.postprocess
         try:
@@ -579,6 +581,12 @@ class Application[ResultT]:
                     self._contract.api_major,
                     extra={"engulf_phase": "discovery"},
                 )
+            for warning in self._packaging_warnings:
+                diagnostics.core.warning(
+                    "%s",
+                    warning,
+                    extra={"engulf_phase": "discovery"},
+                )
             plugin_apis = {
                 item.plugin_id: RuntimeDiagnosticsAPI(
                     item.plugin_id,
@@ -609,7 +617,7 @@ class Application[ResultT]:
             )
             try:
                 self._goal.setup(api)
-            except _PluginCallbackError:
+            except PluginCallbackError:
                 raise
             except Exception as error:
                 diagnostics.failure(
@@ -730,11 +738,14 @@ class Application[ResultT]:
         def dispatch(
             phase: GoalPhase[Any, Any, InvocationAPI, Any],
             event: Any,
+            plugin_ids: Sequence[str] | None = None,
         ) -> tuple[AttributedContribution[Any], ...]:
             return self._phase_dispatcher.dispatch_invocation(
                 phase,
                 event,
                 plugin_apis,
+                diagnostics,
+                plugin_ids,
             )
 
         goal_api = RuntimeGoalAPI(
@@ -763,8 +774,7 @@ class Application[ResultT]:
                 try:
                     achieved = self._goal.achieve(invocation, goal_api)
                     result = _require_result(achieved, "goal.achieve")
-                except _PluginCallbackError as error:
-                    _report_plugin_error(diagnostics, error)
+                except PluginCallbackError as error:
                     result = GoalResult.framework_failed(error=str(error.error))
                 except Exception as error:  # noqa: BLE001 - goals are app code.
                     diagnostics.failure(

@@ -373,7 +373,11 @@ One invocation follows this order:
    context writes.
 
 Callback exceptions become `FRAMEWORK_FAILED` results with exit code 70. Goal phase
-exceptions identify the stable `plugin_id`, not a Python class name.
+exceptions identify the stable `plugin_id`, not a Python class name. Dispatch reports
+the failure once, then raises `PluginCallbackError` to the goal with the plugin IDs
+that already completed that phase, so the goal can address them before the failure
+propagates. A phase declaring `isolate_failures=True` instead calls every selected
+plugin, reports each failure, and does not raise.
 
 Use `application.invoke(args)` when the typed `GoalResult` matters. Use
 `application.run(args)` for a console entry point.
@@ -524,10 +528,79 @@ Engulf resolves two deterministic topological orders:
 - preprocessing for outer before hooks and goal phases that choose `PREPROCESS`;
 - postprocessing for outer after hooks and goal phases that choose `POSTPROCESS`.
 
+Both orders are computed from dependencies, priority, and discovery index, so
+postprocessing order is not the reverse of preprocessing order. A goal that must
+unwind plugins in reverse completion order passes an explicit `plugin_ids` selection
+to `GoalAPI.dispatch()`.
+
 `PluginDependency` expresses presence and independent edges for both orders.
 Priority defaults to 50 and breaks ties only among currently ready nodes. Higher
 priority runs first. Duplicate IDs, missing dependencies, self-dependencies, repeated
 dependency declarations, and cycles are startup errors.
+
+### Declaring Plugin Dependencies
+
+A plugin declares its dependencies once, in its own packaging metadata, in a group
+named after the declaring plugin:
+
+```toml
+[project.entry-points."engulf.plugins.v1.dependency.com_example_audit"]
+"com.example.schema" = "preprocess=before; postprocess=after"
+"com.example.telemetry" = "preprocess=none; postprocess=after"
+```
+
+The group suffix is the declaring plugin's ID with `.`, `-`, and `_` replaced by
+`_`; `plugin_dependency_entry_point_group()` computes it. Each entry name is the
+dependency's plugin ID, and each value is `;`-separated `<field>=<value>` pairs.
+Both `preprocess` and `postprocess` are required, each `before`, `after`, or `none`,
+and at least one must order the dependency: two `none` positions are rejected rather
+than silently producing a dependency with no edges. An omitted field, an unknown
+field, and a repeated field are all errors, so a declaration never means something
+other than what it says. Engulf parses these into `PluginDependency` values and
+merges them into the plugin's metadata.
+
+Only the distribution providing a plugin's goal catalog entry may declare that
+plugin's dependencies. A declaration from any other distribution is a load error, so
+an unrelated wheel cannot inject ordering into someone else's plugin.
+
+Because the declaration is metadata, Engulf reads it without importing anything.
+Implicit dependency activation therefore walks the graph from entry points alone and
+imports only what it activates.
+
+Directory plugins have no packaging metadata and therefore have no dependencies. A
+plugin object that still sets `plugin_dependencies` in code is rejected, so a moved
+declaration cannot be silently lost.
+
+### Packaging And Plugin Dependencies
+
+Installing the code is still the distribution's job. A plugin dependency names a
+plugin ID; the wheel that provides that plugin must come from the project's own
+`dependencies`, which is also the only place a version is pinned:
+
+```toml
+dependencies = ["engulf-clab-schema>=0.1,<0.2"]
+```
+
+Engulf resolves each dependency plugin ID to the distribution that catalogs it and
+compares that distribution against the depending plugin's requirements. A dependency
+whose provider is installed but missing from those requirements is a packaging
+defect: the application starts, since everything it needs is present, and Engulf logs
+one warning naming the plugin, the provider, and the missing requirement. A provider
+in the same distribution needs no requirement.
+
+Catch it before shipping with the `engulf-check-packaging` console script:
+
+```console
+engulf-check-packaging path/to/plugin-project
+```
+
+It reads each project's declarations, resolves every dependency plugin ID through
+the environment it runs in, and exits non-zero for a provider missing from
+`dependencies`, for a declaration it cannot resolve, and for a malformed ordering
+value. Run it where the project's dependencies are installed, such as CI or a
+development environment. An isolated wheel build installs only
+`build-system.requires` and cannot resolve providers, so this is a check to run
+beside the build rather than inside it.
 
 Package dependencies in a plugin wheel make another wheel available; they do not
 activate its plugin entry point. Both adapters must still be selected by application
@@ -754,7 +827,7 @@ The supported top-level `engulf` imports are:
 | Area | Names |
 | --- | --- |
 | Application | `Application`, `ApplicationDefinition`, `GoalFactory`, `FRAMEWORK_ERROR_EXIT` |
-| Selection and discovery | `PluginPolicy`, `PluginPolicyMode`, `PluginLoadError`, `PluginDependencyError`, `PluginElevationError`, `PluginRequirementError`, `application_plugin_entry_point_group`, `goal_plugin_entry_point_group` |
+| Selection and discovery | `PluginPolicy`, `PluginPolicyMode`, `PluginLoadError`, `PluginDependencyError`, `PluginElevationError`, `PluginRequirementError`, `application_plugin_entry_point_group`, `goal_plugin_entry_point_group`, `plugin_dependency_entry_point_group`, `parse_plugin_dependency` |
 | Inspection | `ActivePlugin`, `PluginSource`, `PluginSourceKind` |
 | Logging | `LogLevel`, `LOG_LEVEL_NAMES`, `LoggingConfig`, `LogLevelOverrides`, `logging_option_names` |
 | State policy | `WorkspaceContext`, `WorkspaceRootResolver`, `StateHomeContext`, `StateHomeResolver` |

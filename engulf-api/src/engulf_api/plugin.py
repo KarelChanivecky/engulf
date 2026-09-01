@@ -29,6 +29,7 @@ class PluginMetadata:
     priority: int = 50
     elevation_requirement: ElevationRequirement = ElevationRequirement.NONE
     plugin_dependencies: tuple[PluginDependency, ...] = ()
+    """Resolved from packaging metadata by the runtime, never declared in code."""
     context_reads: frozenset[str] = frozenset()
     context_writes: frozenset[str] = frozenset()
 
@@ -195,9 +196,6 @@ class Plugin(ABC):
     elevation_requirement: ElevationRequirement = ElevationRequirement.NONE
     """Whether this plugin can or must run with elevated privileges."""
 
-    plugin_dependencies: tuple[PluginDependency, ...] = ()
-    """Hard dependencies and their independent two-order constraints."""
-
     context_reads: frozenset[str] = frozenset()
     """Context identifiers this plugin may read."""
 
@@ -206,13 +204,16 @@ class Plugin(ABC):
 
     @property
     def metadata(self) -> PluginMetadata:
-        """Return one immutable snapshot of this adapter's declared metadata."""
+        """Return one immutable snapshot of this adapter's declared metadata.
+
+        Plugin dependencies are absent here: a runtime reads them from packaging
+        metadata and merges them into the snapshot it keeps.
+        """
         return PluginMetadata(
             plugin_id=self.plugin_id,
             goal_requirement=self.goal_requirement,
             priority=self.priority,
             elevation_requirement=self.elevation_requirement,
-            plugin_dependencies=self.plugin_dependencies,
             context_reads=self.context_reads,
             context_writes=self.context_writes,
         )

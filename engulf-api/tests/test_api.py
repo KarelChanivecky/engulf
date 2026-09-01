@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -31,6 +32,7 @@ from engulf_api import (
     InvocationAPI,
     LockTimeoutError,
     Plugin,
+    PluginCallbackError,
     PluginDependency,
     PluginLogger,
     PluginMetadata,
@@ -130,7 +132,8 @@ class ApiTestCase(unittest.TestCase):
                 ElevationRequirement.REQUIRED,
             ),
         )
-        self.assertEqual(plugin.plugin_dependencies, ())
+        self.assertFalse(hasattr(plugin, "plugin_dependencies"))
+        self.assertEqual(plugin.metadata.plugin_dependencies, ())
         self.assertEqual(plugin.context_reads, frozenset())
         self.assertEqual(plugin.context_writes, frozenset())
         self.assertEqual(plugin.goal_requirement, REQUIREMENT)
@@ -168,11 +171,36 @@ class ApiTestCase(unittest.TestCase):
                 context_reads=frozenset({"INVALID"}),
             )
 
-    def test_dependency_defaults_form_middleware_order(self) -> None:
-        dependency = PluginDependency("com.example.required")
+    def test_dependencies_are_runtime_derived_and_must_order_the_target(self) -> None:
+        middleware = PluginDependency(
+            "com.example.required",
+            DependencyPosition.BEFORE,
+            DependencyPosition.AFTER,
+        )
 
-        self.assertIs(dependency.preprocess, DependencyPosition.BEFORE)
-        self.assertIs(dependency.postprocess, DependencyPosition.AFTER)
+        self.assertIs(middleware.preprocess, DependencyPosition.BEFORE)
+        self.assertIs(middleware.postprocess, DependencyPosition.AFTER)
+        self.assertIsNone(
+            PluginDependency(
+                "com.example.required",
+                None,
+                DependencyPosition.BEFORE,
+            ).preprocess
+        )
+        with self.assertRaisesRegex(ValueError, "must order it in the preprocess"):
+            PluginDependency("com.example.required", None, None)
+        with self.assertRaises(TypeError):
+            PluginDependency("com.example.required", "before", None)  # type: ignore[arg-type]
+        with self.assertRaises(TypeError):
+            PluginDependency("com.example.required")  # type: ignore[call-arg]
+        self.assertEqual(
+            PluginMetadata(
+                plugin_id="tests.api.metadata",
+                goal_requirement=REQUIREMENT,
+                plugin_dependencies=(middleware,),
+            ).plugin_dependencies,
+            (middleware,),
+        )
 
     def test_identifiers_must_be_lowercase_and_dot_qualified(self) -> None:
         self.assertEqual(
@@ -241,6 +269,60 @@ class ApiTestCase(unittest.TestCase):
                 PluginOrder.PREPROCESS,
                 lambda plugin, event, api: None,
             )
+
+    def test_phase_failure_isolation_is_opt_in_and_validated(self) -> None:
+        def phase(**overrides: object) -> GoalPhase[object, object, object, object]:
+            return GoalPhase(
+                phase_id="tests.api.cleanup",
+                order=PluginOrder.POSTPROCESS,
+                local_callback=lambda plugin, event, api: None,
+                **overrides,  # type: ignore[arg-type]
+            )
+
+        self.assertFalse(phase().isolate_failures)
+        self.assertTrue(phase(isolate_failures=True).isolate_failures)
+        with self.assertRaises(TypeError):
+            phase(isolate_failures=1)
+
+    def test_callback_failures_are_attributed_to_a_plugin_and_a_phase(self) -> None:
+        cause = RuntimeError("prepare failed")
+        error = PluginCallbackError(
+            "tests.api.failing",
+            "tests.api.phase",
+            cause,
+            completed_plugin_ids=("tests.api.first", "tests.api.second"),
+        )
+
+        self.assertIsInstance(error, RuntimeError)
+        self.assertEqual(error.plugin_id, "tests.api.failing")
+        self.assertEqual(error.phase, "tests.api.phase")
+        self.assertIs(error.error, cause)
+        self.assertEqual(
+            error.completed_plugin_ids,
+            ("tests.api.first", "tests.api.second"),
+        )
+        self.assertEqual(
+            str(error),
+            "plugin tests.api.failing failed in tests.api.phase: prepare failed",
+        )
+        self.assertEqual(
+            PluginCallbackError(
+                "tests.api.failing",
+                "tests.api.phase",
+                cause,
+            ).completed_plugin_ids,
+            (),
+        )
+
+    def test_goal_dispatch_accepts_an_explicit_plugin_selection(self) -> None:
+        signature = inspect.signature(GoalAPI.dispatch)
+        parameter = signature.parameters["plugin_ids"]
+
+        self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(parameter.default)
+        self.assertNotIn(
+            "plugin_ids", inspect.signature(GoalSetupAPI.dispatch).parameters
+        )
 
     def test_lifecycle_apis_expose_only_generic_capabilities(self) -> None:
         for api_type in (

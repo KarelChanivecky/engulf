@@ -7,6 +7,7 @@ from .models import (
     CallMode,
     CallOutcome,
     OutcomeKind,
+    PreparationFailedEvent,
     PreparedCallEvent,
 )
 from .plugin import (
@@ -54,6 +55,7 @@ __all__ = [
     "HelpAPI",
     "OptionSpec",
     "OutcomeKind",
+    "PreparationFailedEvent",
     "PreparedCallEvent",
     "Shell",
     "invoke_provider",

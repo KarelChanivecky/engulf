@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import io
+import sys
 import tempfile
 import unittest
 import warnings
@@ -11,16 +13,25 @@ from unittest.mock import patch
 
 from engulf_api import (
     ContextAccessError,
-    DependencyPosition,
     ElevationRequirement,
     MissingContextError,
-    PluginDependency,
     PluginPhaseError,
     UnusedContextWarning,
 )
-from support import CoreTestPlugin, PassGoal
+from support import (
+    ORDERING_FIXTURE_MODULE,
+    CoreTestPlugin,
+    PassGoal,
+    ordering_entry_points,
+    write_ordering_fixture,
+)
 
-from engulf import FRAMEWORK_ERROR_EXIT, Application, PluginDependencyError
+from engulf import (
+    FRAMEWORK_ERROR_EXIT,
+    Application,
+    PluginDependencyError,
+    PluginPolicy,
+)
 
 
 class TestPlugin(CoreTestPlugin):
@@ -32,7 +43,6 @@ class TestPlugin(CoreTestPlugin):
         *,
         priority: int = 50,
         elevation_requirement: ElevationRequirement = ElevationRequirement.NONE,
-        dependencies: tuple[PluginDependency, ...] = (),
         reads: frozenset[str] = frozenset(),
         writes: frozenset[str] = frozenset(),
         before=None,
@@ -42,7 +52,6 @@ class TestPlugin(CoreTestPlugin):
         self.plugin_id = plugin_id
         self.priority = priority
         self.elevation_requirement = elevation_requirement
-        self.plugin_dependencies = dependencies
         self.context_reads = reads
         self.context_writes = writes
         self.before_action = before
@@ -72,6 +81,33 @@ class DependencyAndContextTestCase(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.plugin_directory = Path(self.temporary_directory.name)
+        self.fixture_directory = self.plugin_directory / "installed"
+        self.fixture_directory.mkdir()
+        self.addCleanup(sys.modules.pop, ORDERING_FIXTURE_MODULE, None)
+
+    def make_installed_application(
+        self,
+        exports: tuple[str, ...],
+        dependencies: dict[str, dict[str, str]] | None = None,
+    ) -> Application:
+        write_ordering_fixture(self.fixture_directory)
+        entries = ordering_entry_points(exports, dependencies)
+        with (
+            patch("engulf.plugin_loader.entry_points", return_value=entries),
+            patch.object(sys, "path", [str(self.fixture_directory), *sys.path]),
+        ):
+            self.fixture = importlib.import_module(ORDERING_FIXTURE_MODULE)
+            self.fixture.calls.clear()
+            return Application(
+                "engulf-dependency-context-tests",
+                PassGoal(),
+                display_name="engulf-dependency-context-tests",
+                vendor="Engulf Tests",
+                product="Dependency Context Tests",
+                short_product_name="Dependencies",
+                version="0.test",
+                plugin_policy=PluginPolicy.allow_all_except(()),
+            )
 
     def make_application(self, *plugins: CoreTestPlugin) -> Application:
         with patch(
@@ -90,153 +126,103 @@ class DependencyAndContextTestCase(unittest.TestCase):
             )
 
     def test_default_dependency_order_is_middleware_shaped(self) -> None:
-        calls: list[str] = []
-        required = TestPlugin("tests.order.required", priority=0, calls=calls)
-        dependent = TestPlugin(
-            "tests.order.dependent",
-            priority=100,
-            dependencies=(PluginDependency(required.plugin_id),),
-            calls=calls,
+        app = self.make_installed_application(
+            ("high", "low"),
+            {"high": {"tests.order.low": "preprocess=before; postprocess=after"}},
         )
 
-        app = self.make_application(dependent, required)
         result = app.run([])
 
         self.assertEqual(result, 0)
         self.assertEqual(
             [plugin.plugin_id for plugin in app.plugins],
-            [required.plugin_id, dependent.plugin_id],
+            ["tests.order.low", "tests.order.high"],
         )
         self.assertEqual(
             [plugin.plugin_id for plugin in app.postprocess_plugins],
-            [dependent.plugin_id, required.plugin_id],
+            ["tests.order.high", "tests.order.low"],
         )
         self.assertEqual(
-            calls,
+            self.fixture.calls,
             [
-                f"{required.plugin_id}.before",
-                f"{dependent.plugin_id}.before",
-                f"{dependent.plugin_id}.after",
-                f"{required.plugin_id}.after",
+                "tests.order.low.before",
+                "tests.order.high.before",
+                "tests.order.high.after",
+                "tests.order.low.after",
             ],
         )
 
     def test_phase_constraints_are_independent(self) -> None:
-        required = TestPlugin("tests.phase.required", priority=0)
-        dependent = TestPlugin(
-            "tests.phase.dependent",
-            priority=100,
-            dependencies=(
-                PluginDependency(
-                    required.plugin_id,
-                    preprocess=None,
-                    postprocess=DependencyPosition.BEFORE,
-                ),
-            ),
+        app = self.make_installed_application(
+            ("high", "low"),
+            {"high": {"tests.order.low": "preprocess=none; postprocess=before"}},
         )
-
-        app = self.make_application(required, dependent)
 
         self.assertEqual(
             [plugin.plugin_id for plugin in app.plugins],
-            [dependent.plugin_id, required.plugin_id],
+            ["tests.order.high", "tests.order.low"],
         )
         self.assertEqual(
             [plugin.plugin_id for plugin in app.postprocess_plugins],
-            [required.plugin_id, dependent.plugin_id],
+            ["tests.order.low", "tests.order.high"],
         )
 
     def test_priority_applies_only_among_ready_plugins(self) -> None:
-        first = TestPlugin("tests.ready.first", priority=0)
-        independent = TestPlugin("tests.ready.independent", priority=50)
-        blocked = TestPlugin(
-            "tests.ready.blocked",
-            priority=100,
-            dependencies=(PluginDependency(first.plugin_id, postprocess=None),),
+        app = self.make_installed_application(
+            ("high", "mid", "low"),
+            {"high": {"tests.order.low": "preprocess=before; postprocess=none"}},
         )
-
-        app = self.make_application(first, blocked, independent)
 
         self.assertEqual(
             [plugin.plugin_id for plugin in app.plugins],
-            [independent.plugin_id, first.plugin_id, blocked.plugin_id],
+            ["tests.order.mid", "tests.order.low", "tests.order.high"],
         )
 
-    def test_dependency_without_phase_edges_still_requires_presence(self) -> None:
-        plugin = TestPlugin(
-            "tests.presence.dependent",
-            dependencies=(
-                PluginDependency(
-                    "tests.presence.missing", preprocess=None, postprocess=None
-                ),
-            ),
-        )
-
+    def test_dependency_on_an_uninstalled_plugin_is_rejected(self) -> None:
         with self.assertRaisesRegex(PluginDependencyError, "requires missing plugin"):
-            self.make_application(plugin)
+            self.make_installed_application(
+                ("high",),
+                {
+                    "high": {
+                        "tests.order.absent": "preprocess=before; postprocess=after"
+                    }
+                },
+            )
 
-    def test_rejects_duplicate_self_and_duplicate_dependency_ids(self) -> None:
+    def test_rejects_self_dependency_and_duplicate_plugin_ids(self) -> None:
+        with self.assertRaisesRegex(PluginDependencyError, "depend on itself"):
+            self.make_installed_application(
+                ("high",),
+                {"high": {"tests.order.high": "preprocess=before; postprocess=after"}},
+            )
+
         duplicate_a = TestPlugin("tests.invalid.duplicate")
         duplicate_b = TestPlugin("tests.invalid.duplicate")
         with self.assertRaisesRegex(PluginDependencyError, "duplicate plugin_id"):
             self.make_application(duplicate_a, duplicate_b)
 
-        self_dependent = TestPlugin(
-            "tests.invalid.self",
-            dependencies=(PluginDependency("tests.invalid.self"),),
-        )
-        with self.assertRaisesRegex(PluginDependencyError, "depend on itself"):
-            self.make_application(self_dependent)
-
-        required = TestPlugin("tests.invalid.required")
-        repeated = TestPlugin(
-            "tests.invalid.repeated",
-            dependencies=(
-                PluginDependency(required.plugin_id),
-                PluginDependency(required.plugin_id),
-            ),
-        )
-        with self.assertRaisesRegex(PluginDependencyError, "more than once"):
-            self.make_application(required, repeated)
-
     def test_reports_preprocess_and_postprocess_cycles(self) -> None:
-        preprocess_a = TestPlugin(
-            "tests.cycle.pre_a",
-            dependencies=(PluginDependency("tests.cycle.pre_b", postprocess=None),),
-        )
-        preprocess_b = TestPlugin(
-            "tests.cycle.pre_b",
-            dependencies=(PluginDependency("tests.cycle.pre_a", postprocess=None),),
-        )
         with self.assertRaisesRegex(
             PluginDependencyError, "preprocess plugin dependency cycle"
         ):
-            self.make_application(preprocess_a, preprocess_b)
+            self.make_installed_application(
+                ("high", "low"),
+                {
+                    "high": {"tests.order.low": "preprocess=before; postprocess=none"},
+                    "low": {"tests.order.high": "preprocess=before; postprocess=none"},
+                },
+            )
 
-        postprocess_a = TestPlugin(
-            "tests.cycle.post_a",
-            dependencies=(
-                PluginDependency(
-                    "tests.cycle.post_b",
-                    preprocess=None,
-                    postprocess=DependencyPosition.BEFORE,
-                ),
-            ),
-        )
-        postprocess_b = TestPlugin(
-            "tests.cycle.post_b",
-            dependencies=(
-                PluginDependency(
-                    "tests.cycle.post_a",
-                    preprocess=None,
-                    postprocess=DependencyPosition.BEFORE,
-                ),
-            ),
-        )
         with self.assertRaisesRegex(
             PluginDependencyError, "postprocess plugin dependency cycle"
         ):
-            self.make_application(postprocess_a, postprocess_b)
+            self.make_installed_application(
+                ("high", "low"),
+                {
+                    "high": {"tests.order.low": "preprocess=none; postprocess=before"},
+                    "low": {"tests.order.high": "preprocess=none; postprocess=before"},
+                },
+            )
 
     def test_rejects_invalid_identity_and_context_metadata(self) -> None:
         with self.assertRaisesRegex(PluginDependencyError, "dot-qualified"):
