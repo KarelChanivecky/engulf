@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "engulf-executable-wrapper-api"
-version = "1.1.0"
+version = "1.2.0"
 description = "Plugin contract for the Engulf executable-wrapper goal"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
-dependencies = ["engulf-api>=1.0,<2"]
+dependencies = ["engulf-api>=1.2,<2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/engulf_executable_wrapper_api"]

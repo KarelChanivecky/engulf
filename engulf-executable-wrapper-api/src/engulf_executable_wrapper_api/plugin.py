@@ -21,7 +21,7 @@ from .registry import ArgumentRegistry, CompletionRegistry
 
 EXECUTABLE_WRAPPER_GOAL_ID = "org.engulf.executable-wrapper"
 EXECUTABLE_WRAPPER_API_MAJOR = 1
-EXECUTABLE_WRAPPER_API_VERSION = "1.1.0"
+EXECUTABLE_WRAPPER_API_VERSION = "1.2.0"
 
 
 class HelpAPI(DiagnosticsAPI):

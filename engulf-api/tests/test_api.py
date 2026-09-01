@@ -67,7 +67,7 @@ class ExampleGoal(Goal[str]):
 class ApiTestCase(unittest.TestCase):
     def test_api_version_matches_contract(self) -> None:
         self.assertEqual(PLUGIN_API_MAJOR, 1)
-        self.assertEqual(PLUGIN_API_VERSION, "1.1.0")
+        self.assertEqual(PLUGIN_API_VERSION, "1.2.0")
 
     def test_application_metadata_is_immutable_validated_and_keyword_only(self) -> None:
         metadata = ApplicationMetadata(
