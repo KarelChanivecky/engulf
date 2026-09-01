@@ -246,10 +246,12 @@ tracks progress itself; keep it that way, because an interrupt carries no plugin
 attribution and unwinding must not depend on the failure being an `Exception`.
 
 A preparer that touches external resources needs two unwind paths: `prepare_failed`
-for a later plugin's failure, and its own `try`/`finally` for its own. Use `finally`,
-never `except Exception`, so an interrupt unwinds too. They differ in lock state, so a
-release helper shared between them must assume its leases are already held and let
-`prepare_failed` acquire them. Do not reintroduce a synthetic `FRAMEWORK_FAILED` outcome
+for a later plugin's failure, and a handler in its own `prepare_call` for its own.
+Write that handler as `except BaseException: release(...); raise`, not as a `finally`:
+the intent is "release only if preparation did not finish", so a `finally` needs a
+`prepared` flag that every early return must set, and `except Exception` drops
+interrupts. The two paths differ in lock state, so a release helper shared between
+them must assume its leases are already held and let `prepare_failed` acquire them. Do not reintroduce a synthetic `FRAMEWORK_FAILED` outcome
 for it, and keep `SPAWN_FAILED` for a prepared call whose process would not start.
 Invocation-scoped cleanup that does not depend on preparation progress belongs in
 `after_goal`.

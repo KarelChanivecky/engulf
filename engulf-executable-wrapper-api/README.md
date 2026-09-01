@@ -270,11 +270,34 @@ Every recipient completed preparation, so this callback never has to ask how far
 preparation got. Two callbacks it does not reach:
 
 - the plugin that raised is not called; unwind partial work inside its own
-  `prepare_call` with `try`/`finally`. Use `finally`, not `except Exception`: an
-  interrupt is not an `Exception`, and a narrow catch leaves that plugin's own
-  partial work behind on Ctrl-C even though every plugin before it is unwound;
+  `prepare_call`, catching `BaseException` and re-raising;
 - plugins whose `prepare_call` never ran are not called, because they prepared
   nothing.
+
+Write that self-unwind as a failure handler, not a `finally`:
+
+```python
+def prepare_call(self, event, api) -> None:
+    if nothing_to_do(event):
+        return
+    claimed: list[str] = []
+    try:
+        for resource in required(event):
+            claim(resource)
+            claimed.append(resource)
+            if already_current(resource):
+                return
+    except BaseException:
+        release(claimed)
+        raise
+```
+
+`except BaseException` says what is meant: release only when preparation did not
+finish. `finally` says "always", so the same intent needs a `prepared` flag that every
+early return has to remember to set, and forgetting one releases resources a
+successful preparation just built. Catch `BaseException` rather than `Exception` so an
+interrupt unwinds too, and re-raise, which also keeps the handler clear of
+blind-except lint.
 
 A plugin that acquires leases or opens transactions therefore needs both paths, and
 they do not run under the same lock state. Inside `prepare_call`, whatever that
