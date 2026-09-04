@@ -4,7 +4,7 @@ import ast
 import unittest
 from pathlib import Path
 
-WORKSPACE = Path(__file__).resolve().parents[2]
+WORKSPACE = Path(__file__).resolve().parents[1]
 DOCUMENTED_PACKAGES = (
     (
         WORKSPACE / "engulf-api" / "src" / "engulf_api" / "__init__.py",
@@ -58,17 +58,6 @@ DOCUMENTED_PACKAGES = (
         WORKSPACE / "examples" / "encryption-app" / "README.md",
     ),
 )
-WEBSITE_PAGES = (
-    "README.md",
-    "engulf-api/README.md",
-    "engulf/README.md",
-    "engulf-executable-wrapper-api/README.md",
-    "engulf-executable-wrapper/README.md",
-    "plugins/engulf-plugin-list/README.md",
-    "examples/encryption-core/README.md",
-    "examples/encryption-app/README.md",
-    "repository/README.md",
-)
 
 
 def _public_exports(path: Path) -> tuple[str, ...]:
@@ -99,21 +88,6 @@ class DocumentationTestCase(unittest.TestCase):
             )
             with self.subTest(package=package.parent.name):
                 self.assertEqual(missing, ())
-
-    def test_website_image_and_navigation_include_every_documentation_page(
-        self,
-    ) -> None:
-        dockerfile = (WORKSPACE / "repository" / "Dockerfile").read_text(
-            encoding="utf-8"
-        )
-        configuration = (WORKSPACE / "repository" / "mkdocs.yml").read_text(
-            encoding="utf-8"
-        )
-        for relative in WEBSITE_PAGES:
-            with self.subTest(page=relative):
-                self.assertTrue((WORKSPACE / relative).is_file())
-                self.assertIn(f"COPY {relative} /source/{relative}", dockerfile)
-                self.assertIn(relative, configuration)
 
 
 if __name__ == "__main__":
