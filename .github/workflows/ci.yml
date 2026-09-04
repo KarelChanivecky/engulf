@@ -66,6 +66,8 @@ jobs:
           python -m ruff check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper examples
           python -m ruff format --check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper examples
           python -m mypy
+      - name: Check documentation consistency
+        run: python -m unittest discover -s tests -v
       - name: Build distributions
         run: |
           python -m build --outdir build-artifacts/engulf-api engulf-api

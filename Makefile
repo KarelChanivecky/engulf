@@ -13,10 +13,10 @@ dir_of = $(or $(DIR_$1),$1)
 
 INSTALL_PYTHON ?= python3.14
 
-.PHONY: all environment clean-dist check-packaging build publish install test-repository
+.PHONY: all environment clean-dist check-packaging build install
 
-# Default target: build everything, then upload whatever was not published yet.
-all: build publish
+# Default target: build every distribution.
+all: build
 
 environment:
 	@if [ ! -d .venv ]; then \
@@ -40,34 +40,19 @@ check-packaging:
 
 build: check-packaging $(PACKAGES:%=dist/%/.built)
 
-publish: $(PACKAGES:%=publish-%)
-
 install:
 	@command -v "$(INSTALL_PYTHON)" >/dev/null 2>&1 || { echo "error: $(INSTALL_PYTHON) is required" >&2; exit 1; }
 	@$(INSTALL_PYTHON) -m pip install $(PACKAGES)
 
-test-repository:
-	python3 -m unittest discover -s repository/tests -v
-	bash -n repository.sh build.sh publish.sh
-
-# --- Per-package build / publish rules --------------------------------------
+# --- Per-package build rules -------------------------------------------------
 #
-# dist/<pkg>/.built stamps a successful build (rebuilt only when the package's
-# own files change); dist/<pkg>/.published stamps a successful upload of that
-# build and is wiped by every rebuild. Stamps can lie (switched
-# TWINE_REPOSITORY_URL, wiped/rebuilt server), so check-<pkg>-published — an
-# order-only phony prerequisite of .published — runs on every publish
-# invocation and re-validates the stamp against the live PEP 503 index,
-# deleting it when the server does not host the built files. Once the checker
-# has run, Make's mtime logic decides: stamp present and newer than .built →
-# skip the upload; stamp removed or wiped by a rebuild → upload. The upload
-# still passes --skip-existing as the final arbiter.
-# `make build-<pkg>` / `make publish-<pkg>` work on a single package;
-# `make build` / `make publish` cover all of them.
+# dist/<pkg>/.built stamps a successful build and is rebuilt only when the
+# package's own files change. `make build-<pkg>` works on a single package;
+# `make build` covers all of them.
 
 define package_rules
 
-.PHONY: build-$1 publish-$1
+.PHONY: build-$1
 
 $1_files := $(shell find $(call dir_of,$1) -type f -not -path '*/__pycache__/*' -not -name '*.pyc')
 
@@ -79,30 +64,6 @@ dist/$1/.built: $(call dir_of,$1)/pyproject.toml $$($1_files) | environment
 	@touch $$@
 
 build-$1: dist/$1/.built
-
-# Order-only phony checker: re-validate the publish against what the server
-# actually hosts (simple-index anchors carry the exact file names, version
-# included, so this detects "server has 0.1, local has 0.2"; it never clears
-# the stamp for the wrong server because the URL is part of the query). An
-# unreachable server keeps the stamp — the upload's --skip-existing is the
-# final arbiter anyway.
-.PHONY: check-$1-published
-
-check-$1-published:
-	@test -n "$$$${TWINE_REPOSITORY_URL:-}" || { echo "error: TWINE_REPOSITORY_URL is required" >&2; exit 1; }
-	@[ -d dist/$1 ] || exit 0
-	@$(PYTHON) check_published.py "$$$$TWINE_REPOSITORY_URL" $1 dist/$1 || \
-		if [ $$$$? -eq 1 ]; then rm -f dist/$1/.published; else exit 0; fi
-
-build-$1: dist/$1/.built
-
-dist/$1/.published: dist/$1/.built | check-$1-published
-	@test -n "$$$${TWINE_USERNAME:-}" || { echo "error: TWINE_USERNAME and TWINE_PASSWORD are required (or run through publish.sh with the managed repository)" >&2; exit 1; }
-	@test -n "$$$${TWINE_PASSWORD:-}" || { echo "error: TWINE_USERNAME and TWINE_PASSWORD are required (or run through publish.sh with the managed repository)" >&2; exit 1; }
-	$(PYTHON) twine_upload.py upload --skip-existing --repository-url "$$$$TWINE_REPOSITORY_URL" dist/$1/*
-	@touch $$@
-
-publish-$1: dist/$1/.published
 
 endef
 

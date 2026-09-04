@@ -344,13 +344,14 @@ PYTHONPATH=engulf-api/src .venv/bin/python -m unittest discover -s engulf-api/te
 PYTHONPATH=engulf-api/src:engulf-executable-wrapper-api/src .venv/bin/python -m unittest discover -s engulf-executable-wrapper-api/tests -v
 PYTHONPATH=engulf-api/src:engulf/src .venv/bin/python -m unittest discover -s engulf/tests -v
 PYTHONPATH=engulf-api/src:engulf/src:engulf-executable-wrapper-api/src:engulf-executable-wrapper/src .venv/bin/python -m unittest discover -s engulf-executable-wrapper/tests -v
+.venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python -m ruff check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper plugins examples
 .venv/bin/python -m ruff format --check engulf-api engulf engulf-executable-wrapper-api engulf-executable-wrapper plugins examples
 .venv/bin/python -m mypy
 ```
 
 When package metadata changes, build all five wheels and source distributions and run
-Twine checks. Do not hand-edit generated archives or publish unless explicitly asked.
+Twine checks with `./build.sh`. Do not hand-edit generated archives.
 
 Use deterministic subprocess/multiprocessing coordination for lock and signal tests.
 Cover failure, ordering, repeated invocation, policy filtering, and non-import of
