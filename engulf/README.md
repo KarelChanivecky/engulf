@@ -583,7 +583,7 @@ plugin ID; the wheel that provides that plugin must come from the project's own
 `dependencies`, which is also the only place a version is pinned:
 
 ```toml
-dependencies = ["engulf-clab-schema>=0.1,<0.2"]
+dependencies = ["engulf-clab-schema>=0.1,<1"]
 ```
 
 Engulf resolves each dependency plugin ID to the distribution that catalogs it and

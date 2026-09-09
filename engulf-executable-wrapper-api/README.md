@@ -374,7 +374,7 @@ file, in a group named after itself:
 dependencies = [
     "engulf-api>=1.0,<2",
     "engulf-executable-wrapper-api>=1.0,<2",
-    "example-engulf-schema>=0.1,<0.2",
+    "example-engulf-schema>=0.1,<1",
 ]
 
 [project.entry-points."engulf.plugins.v1.dependency.com_example_shared_audit"]
