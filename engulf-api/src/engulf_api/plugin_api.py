@@ -71,8 +71,15 @@ class InvocationAPI(DiagnosticsAPI):
         """Read an allowed context value or fail if it has not been written."""
 
     @abstractmethod
-    def set_context(self, context_id: str, value: object) -> None:
-        """Create or replace an allowed context value."""
+    def set_context(
+        self, context_id: str, value: object, *, allow_unused: bool = False
+    ) -> None:
+        """Create or replace an allowed context value.
+
+        ``allow_unused=True`` suppresses the unread-context warning for this ID.
+        The latest write determines this policy; successful reads remain tracked
+        per ID for the invocation. The flag must be a boolean.
+        """
 
     @overload
     def state(self, scope: Literal[StateScope.WORKSPACE]) -> WorkspaceState: ...

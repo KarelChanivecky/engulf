@@ -349,6 +349,210 @@ class DependencyAndContextTestCase(unittest.TestCase):
         self.assertIs(caught[0].category, UnusedContextWarning)
         self.assertIn(f"{alpha}, {beta}", str(caught[0].message))
 
+    def test_allow_unused_excludes_only_optional_context_from_warning(self) -> None:
+        alpha = "tests.context.alpha"
+        beta = "tests.context.beta"
+        optional = "tests.context.optional"
+
+        def write(event, api) -> None:
+            api.set_context(beta, 2, allow_unused=False)
+            api.set_context(optional, 3, allow_unused=True)
+            api.set_context(alpha, 1)
+
+        plugin = TestPlugin(
+            "tests.context.optional_writer",
+            writes=frozenset({alpha, beta, optional}),
+            before=write,
+        )
+        with (
+            self.make_application(plugin) as app,
+            warnings.catch_warnings(record=True) as caught,
+        ):
+            warnings.simplefilter("always")
+            self.assertEqual(app.run([]), 0)
+
+        self.assertEqual(len(caught), 1)
+        self.assertIs(caught[0].category, UnusedContextWarning)
+        self.assertEqual(
+            str(caught[0].message), f"context written but never read: {alpha}, {beta}"
+        )
+
+    def test_optional_context_can_be_read_or_left_unread(self) -> None:
+        context_id = "tests.context.optional"
+        value = object()
+
+        for reader in (None, "get_context", "require_context"):
+            with self.subTest(reader=reader):
+
+                def after(event, api, reader=reader) -> None:
+                    if reader is not None:
+                        self.assertIs(getattr(api, reader)(context_id), value)
+
+                plugin = TestPlugin(
+                    "tests.context.optional_writer",
+                    reads=frozenset({context_id}),
+                    writes=frozenset({context_id}),
+                    before=lambda event, api: api.set_context(
+                        context_id, value, allow_unused=True
+                    ),
+                    after=after,
+                )
+                with (
+                    self.make_application(plugin) as app,
+                    warnings.catch_warnings(record=True) as caught,
+                ):
+                    warnings.simplefilter("always")
+                    self.assertEqual(app.run([]), 0)
+                self.assertEqual(caught, [])
+
+    def test_latest_writer_controls_the_unused_context_policy(self) -> None:
+        context_id = "tests.context.overwrite"
+
+        for first_optional in (False, True):
+            for last_optional in (False, True):
+                with self.subTest(first=first_optional, last=last_optional):
+
+                    def last_write(event, api, allow_unused=last_optional) -> None:
+                        if allow_unused:
+                            api.set_context(context_id, "last", allow_unused=True)
+                        else:
+                            api.set_context(context_id, "last")
+
+                    first = TestPlugin(
+                        "tests.context.first_writer",
+                        priority=100,
+                        writes=frozenset({context_id}),
+                        before=lambda event, api, allow_unused=first_optional: (
+                            api.set_context(
+                                context_id, "first", allow_unused=allow_unused
+                            )
+                        ),
+                    )
+                    last = TestPlugin(
+                        "tests.context.last_writer",
+                        priority=50,
+                        writes=frozenset({context_id}),
+                        before=last_write,
+                    )
+                    with (
+                        self.make_application(last, first) as app,
+                        warnings.catch_warnings(record=True) as caught,
+                    ):
+                        warnings.simplefilter("always")
+                        self.assertEqual(app.run([]), 0)
+                    if last_optional:
+                        self.assertEqual(caught, [])
+                    else:
+                        self.assertEqual(len(caught), 1)
+                        self.assertIs(caught[0].category, UnusedContextWarning)
+                        self.assertIn(context_id, str(caught[0].message))
+
+    def test_optional_context_policy_resets_on_the_next_invocation(self) -> None:
+        context_id = "tests.context.optional"
+
+        def write(event, api) -> None:
+            if event.arguments == ("optional",):
+                api.set_context(context_id, "first", allow_unused=True)
+            else:
+                api.set_context(context_id, "second")
+
+        plugin = TestPlugin(
+            "tests.context.optional_writer",
+            writes=frozenset({context_id}),
+            before=write,
+        )
+        with self.make_application(plugin) as app:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                self.assertEqual(app.run(["optional"]), 0)
+            self.assertEqual(caught, [])
+            with self.assertWarnsRegex(UnusedContextWarning, context_id):
+                self.assertEqual(app.run([]), 0)
+
+    def test_optional_context_preserves_reads_across_overwrites(self) -> None:
+        context_id = "tests.context.optional"
+
+        def access(event, api) -> None:
+            api.set_context(context_id, None, allow_unused=True)
+            self.assertIsNone(api.require_context(context_id))
+            api.set_context(context_id, "replacement")
+
+        plugin = TestPlugin(
+            "tests.context.optional_reader",
+            reads=frozenset({context_id}),
+            writes=frozenset({context_id}),
+            before=access,
+        )
+        with (
+            self.make_application(plugin) as app,
+            warnings.catch_warnings(record=True) as caught,
+        ):
+            warnings.simplefilter("always")
+            self.assertEqual(app.run([]), 0)
+        self.assertEqual(caught, [])
+
+    def test_invalid_allow_unused_does_not_change_context(self) -> None:
+        context_id = "tests.context.optional"
+
+        def access(event, api) -> None:
+            api.set_context(context_id, "original", allow_unused=True)
+            for invalid in (None, 0, 1, "true", []):
+                with (
+                    self.subTest(allow_unused=invalid),
+                    self.assertRaisesRegex(TypeError, "allow_unused must be a boolean"),
+                ):
+                    api.set_context(context_id, "replacement", allow_unused=invalid)
+            self.assertEqual(api.require_context(context_id), "original")
+
+        plugin = TestPlugin(
+            "tests.context.optional_writer",
+            reads=frozenset({context_id}),
+            writes=frozenset({context_id}),
+            before=access,
+        )
+        with self.make_application(plugin) as app:
+            self.assertEqual(app.run([]), 0)
+
+    def test_allow_unused_preserves_context_permissions_and_callback_lifetime(
+        self,
+    ) -> None:
+        context_id = "tests.context.restricted"
+        retained = []
+
+        def access(event, api) -> None:
+            with self.assertRaises(ContextAccessError):
+                api.set_context(context_id, "value", allow_unused=True)
+            retained.append(api)
+
+        plugin = TestPlugin("tests.context.optional_writer", before=access)
+        with self.make_application(plugin) as app:
+            self.assertEqual(app.run([]), 0)
+        with self.assertRaises(PluginPhaseError):
+            retained[0].set_context(context_id, "value", allow_unused=True)
+
+    def test_goal_can_publish_optional_context(self) -> None:
+        class OptionalContextGoal(PassGoal):
+            def achieve(self, invocation, api):
+                api.set_context("tests.context.goal", "value", allow_unused=True)
+                return super().achieve(invocation, api)
+
+        with (
+            Application(
+                "tests.context.goal",
+                OptionalContextGoal(),
+                display_name="context-tests",
+                vendor="Engulf Tests",
+                product="Context Tests",
+                short_product_name="Context",
+                version="0.test",
+                discover_installed=False,
+            ) as app,
+            warnings.catch_warnings(record=True) as caught,
+        ):
+            warnings.simplefilter("always")
+            self.assertEqual(app.run([]), 0)
+        self.assertEqual(caught, [])
+
     def test_unread_context_is_not_reported_when_the_goal_does_not_complete(
         self,
     ) -> None:

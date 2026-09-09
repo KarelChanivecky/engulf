@@ -355,10 +355,26 @@ identifiers without adding plugin metadata.
 - `get_context(id, default=None)` returns the default when no value exists. A miss
   does not count as a successful read.
 - `require_context(id)` returns the value or raises `MissingContextError`.
-- `set_context(id, value)` creates or replaces any earlier value; values are
-  arbitrary in-process Python objects.
-- At invocation cleanup, Engulf emits one `UnusedContextWarning` listing sorted IDs
-  that were written but never successfully read.
+- `set_context(id, value, *, allow_unused=False)` creates or replaces any earlier
+  value; values are arbitrary in-process Python objects. Set `allow_unused=True`
+  when consumers are optional and an unread value should not produce a warning.
+  The flag must be a boolean and does not change read or write permissions.
+- At cleanup of a completed invocation, Engulf emits one `UnusedContextWarning`
+  listing sorted IDs that were written but never successfully read, excluding IDs
+  whose latest write used `allow_unused=True`. Incomplete invocations do not emit
+  this warning; a completed invocation with a nonzero exit still can.
+
+For example, a plugin with the appropriate `context_writes` declaration can publish
+optional data for another plugin:
+
+```python
+api.set_context("com.example.report.details", details, allow_unused=True)
+```
+
+Each write replaces the ID's warning policy along with its value. A later write
+that omits `allow_unused` restores the default policy. Successful reads are tracked
+per ID across the invocation, including overwrites; suppression does not count as
+a read. Values, read tracking, and warning policies reset on the next invocation.
 
 Context declarations describe access only. They do not imply transportability,
 trust, data ownership, or plugin dependency order.

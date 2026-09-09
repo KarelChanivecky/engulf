@@ -307,6 +307,21 @@ class ApiTestCase(unittest.TestCase):
             "plugin_ids", inspect.signature(GoalSetupAPI.dispatch).parameters
         )
 
+    def test_context_unused_policy_is_optional_and_keyword_only(self) -> None:
+        for api_type in (InvocationAPI, BeforeGoalAPI, AfterGoalAPI, GoalAPI):
+            with self.subTest(api=api_type.__name__):
+                signature = inspect.signature(api_type.set_context)
+                parameter = signature.parameters["allow_unused"]
+                self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIs(parameter.default, False)
+                self.assertIs(
+                    get_type_hints(api_type.set_context)["allow_unused"], bool
+                )
+                signature.bind(None, "tests.context.value", object())
+                signature.bind(None, "tests.context.value", object(), allow_unused=True)
+                with self.assertRaises(TypeError):
+                    signature.bind(None, "tests.context.value", object(), True)
+
     def test_lifecycle_apis_expose_only_generic_capabilities(self) -> None:
         for api_type in (
             DiagnosticsAPI,

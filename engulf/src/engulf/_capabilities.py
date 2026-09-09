@@ -32,6 +32,7 @@ class InvocationContextTable:
         self._values: dict[str, object] = {}
         self._written: set[str] = set()
         self._read: set[str] = set()
+        self._allow_unused: set[str] = set()
 
     def get(self, context_id: str, default: object | None) -> object | None:
         if context_id not in self._values:
@@ -45,13 +46,21 @@ class InvocationContextTable:
         self._read.add(context_id)
         return self._values[context_id]
 
-    def set(self, context_id: str, value: object) -> None:
+    def set(
+        self, context_id: str, value: object, *, allow_unused: bool = False
+    ) -> None:
+        if type(allow_unused) is not bool:
+            raise TypeError("allow_unused must be a boolean")
         self._values[context_id] = value
         self._written.add(context_id)
+        if allow_unused:
+            self._allow_unused.add(context_id)
+        else:
+            self._allow_unused.discard(context_id)
 
     @property
     def unused_ids(self) -> tuple[str, ...]:
-        return tuple(sorted(self._written - self._read))
+        return tuple(sorted(self._written - self._read - self._allow_unused))
 
 
 class _ActivationState:
@@ -150,10 +159,12 @@ class _ContextCapabilities:
         self._require_access(context_id, self._reads, "read")
         return self._table.require(context_id)
 
-    def set(self, context_id: str, value: object) -> None:
+    def set(
+        self, context_id: str, value: object, *, allow_unused: bool = False
+    ) -> None:
         self._require_active("set_context")
         self._require_access(context_id, self._writes, "write")
-        self._table.set(context_id, value)
+        self._table.set(context_id, value, allow_unused=allow_unused)
 
     def _require_access(
         self,

@@ -130,8 +130,10 @@ class RuntimePluginAPI(BeforeGoalAPI, AfterGoalAPI):
     def require_context(self, context_id: str) -> object:
         return self._contexts.require(context_id)
 
-    def set_context(self, context_id: str, value: object) -> None:
-        self._contexts.set(context_id, value)
+    def set_context(
+        self, context_id: str, value: object, *, allow_unused: bool = False
+    ) -> None:
+        self._contexts.set(context_id, value, allow_unused=allow_unused)
 
     @overload
     def state(self, scope: Literal[StateScope.WORKSPACE]) -> WorkspaceState: ...

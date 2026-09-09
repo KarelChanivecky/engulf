@@ -370,7 +370,8 @@ One invocation follows this order:
 6. Let the goal dispatch any typed inner phases it defines.
 7. Run `after_goal` middleware in postprocessing order for entered plugins.
 8. Release capabilities, finalize requested workspace destruction, and report unused
-   context writes.
+   context writes for completed invocations. An ID whose latest write used
+   `api.set_context(id, value, allow_unused=True)` is excluded from this warning.
 
 Callback exceptions become `FRAMEWORK_FAILED` results with exit code 70. Goal phase
 exceptions identify the stable `plugin_id`, not a Python class name. Dispatch reports
