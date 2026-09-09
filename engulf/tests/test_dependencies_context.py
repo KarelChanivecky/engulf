@@ -14,6 +14,7 @@ from unittest.mock import patch
 from engulf_api import (
     ContextAccessError,
     ElevationRequirement,
+    GoalResult,
     MissingContextError,
     PluginPhaseError,
     UnusedContextWarning,
@@ -109,13 +110,36 @@ class DependencyAndContextTestCase(unittest.TestCase):
                 plugin_policy=PluginPolicy.allow_all_except(()),
             )
 
-    def make_application(self, *plugins: CoreTestPlugin) -> Application:
+    def make_failing_application(self, *plugins: CoreTestPlugin) -> Application:
+        class _FailingGoal(PassGoal):
+            def achieve(self, invocation, api):
+                del invocation, api
+                return GoalResult.framework_failed(error="deliberate test failure")
+
         with patch(
             "engulf.application.load_directory_plugins", return_value=tuple(plugins)
         ):
             return Application(
                 "engulf-dependency-context-tests",
-                PassGoal(),
+                _FailingGoal(),
+                display_name="engulf-dependency-context-tests",
+                vendor="Engulf Tests",
+                product="Dependency Context Tests",
+                short_product_name="Dependencies",
+                version="0.test",
+                plugin_dir=self.plugin_directory,
+                discover_installed=False,
+            )
+
+    def make_application(
+        self, *plugins: CoreTestPlugin, exit_code: int = 0
+    ) -> Application:
+        with patch(
+            "engulf.application.load_directory_plugins", return_value=tuple(plugins)
+        ):
+            return Application(
+                "engulf-dependency-context-tests",
+                PassGoal(exit_code=exit_code),
                 display_name="engulf-dependency-context-tests",
                 vendor="Engulf Tests",
                 product="Dependency Context Tests",
@@ -324,6 +348,51 @@ class DependencyAndContextTestCase(unittest.TestCase):
         self.assertEqual(len(caught), 1)
         self.assertIs(caught[0].category, UnusedContextWarning)
         self.assertIn(f"{alpha}, {beta}", str(caught[0].message))
+
+    def test_unread_context_is_not_reported_when_the_goal_does_not_complete(
+        self,
+    ) -> None:
+        context_id = "tests.context.aborted"
+
+        def write(event, api) -> None:
+            api.set_context(context_id, 1)
+
+        plugin = TestPlugin(
+            "tests.context.aborted_writer",
+            writes=frozenset({context_id}),
+            before=write,
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = self.make_failing_application(plugin).run([])
+
+        # The pipeline stopped early, so a later consumer never ran. Warning
+        # here would bury the failure the operator actually needs to read.
+        self.assertNotEqual(result, 0)
+        self.assertEqual(caught, [])
+
+    def test_unread_context_is_still_reported_on_a_nonzero_exit(self) -> None:
+        context_id = "tests.context.nonzero"
+
+        def write(event, api) -> None:
+            api.set_context(context_id, 1)
+
+        plugin = TestPlugin(
+            "tests.context.nonzero_writer",
+            writes=frozenset({context_id}),
+            before=write,
+        )
+
+        # A completed goal ran every plugin, so an unread context is still the
+        # design signal the warning exists for, whatever the command returned.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = self.make_application(plugin, exit_code=3).run([])
+
+        self.assertEqual(result, 3)
+        self.assertEqual(len(caught), 1)
+        self.assertIs(caught[0].category, UnusedContextWarning)
 
     def test_missing_get_does_not_count_as_a_context_read(self) -> None:
         context_id = "tests.context.missing_get"

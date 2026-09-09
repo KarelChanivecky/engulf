@@ -18,6 +18,7 @@ from engulf_api import (
     GoalContract,
     GoalPhase,
     GoalResult,
+    GoalResultStatus,
     Invocation,
     InvocationAPI,
     Plugin,
@@ -761,7 +762,7 @@ class Application[ResultT]:
         )
         entered: set[str] = set()
         cleanup_failures: tuple[WorkspaceCleanupFailure, ...] = ()
-        result: GoalResult[Any]
+        result: GoalResult[Any] | None = None
         try:
             before_result = self._hook_runner.run_before(
                 invocation,
@@ -810,7 +811,16 @@ class Application[ResultT]:
             for api in plugin_apis.values():
                 api.close()
             goal_api.close()
-            if context_table.unused_ids:
+            # Unread context is only a design signal on a run that reached
+            # the end. A rejected, failed, or diagnostic invocation stops the
+            # pipeline early, so context a later plugin would have consumed is
+            # legitimately unread -- warning then buries the real failure the
+            # operator needs to read.
+            if (
+                context_table.unused_ids
+                and result is not None
+                and result.status is GoalResultStatus.COMPLETED
+            ):
                 warnings.warn(
                     "context written but never read: "
                     + ", ".join(context_table.unused_ids),
