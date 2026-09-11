@@ -96,6 +96,9 @@ class _CountingDistribution:
 
 class PluginLoaderTestCase(unittest.TestCase):
     def setUp(self) -> None:
+        elevation = patch("engulf.application.is_process_elevated", return_value=False)
+        elevation.start()
+        self.addCleanup(elevation.stop)
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.directory = Path(self.temporary_directory.name)

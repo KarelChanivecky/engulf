@@ -60,6 +60,9 @@ class CompletionPlugin(ExecutableWrapperPlugin):
 
 class CompletionTestCase(unittest.TestCase):
     def setUp(self) -> None:
+        elevation = patch("engulf.application.is_process_elevated", return_value=False)
+        elevation.start()
+        self.addCleanup(elevation.stop)
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.plugin_directory = Path(self.temporary_directory.name)
@@ -452,23 +455,25 @@ class ShellCompletionIntegrationTestCase(unittest.TestCase):
                 f"""\
                 #!{sys.executable}
                 from pathlib import Path
+                from unittest.mock import patch
                 from engulf import Application
                 from engulf_executable_wrapper import ExecutableWrapperGoal
 
-                application = Application(
-                    "engulf-shell-integration-tests",
-                    ExecutableWrapperGoal(
-                        "/bin/echo",
-                        completion_provider=lambda context: ["--base"],
-                    ),
-                    display_name="engulf-shell-tests",
-                    vendor="Engulf Tests",
-                    product="Shell Completion Tests",
-                    short_product_name="Completion",
-                    version="0.test",
-                    plugin_dir=Path(__file__).with_name("plugins"),
-                    discover_installed=False,
-                )
+                with patch("engulf.application.is_process_elevated", return_value=False):
+                    application = Application(
+                        "engulf-shell-integration-tests",
+                        ExecutableWrapperGoal(
+                            "/bin/echo",
+                            completion_provider=lambda context: ["--base"],
+                        ),
+                        display_name="engulf-shell-tests",
+                        vendor="Engulf Tests",
+                        product="Shell Completion Tests",
+                        short_product_name="Completion",
+                        version="0.test",
+                        plugin_dir=Path(__file__).with_name("plugins"),
+                        discover_installed=False,
+                    )
                 raise SystemExit(application.run())
                 """
             ),

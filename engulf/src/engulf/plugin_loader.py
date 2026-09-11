@@ -68,7 +68,13 @@ _MISSING_DISTRIBUTION_IDENTITY = DistributionIdentity(False, None, None, "")
 class EntryPointIndex:
     """One installed entry-point snapshot shared by an application construction."""
 
-    __slots__ = ("_distribution_identities", "_groups", "_prefixes", "_requirements")
+    __slots__ = (
+        "_distribution_files",
+        "_distribution_identities",
+        "_groups",
+        "_prefixes",
+        "_requirements",
+    )
 
     def __init__(
         self,
@@ -79,6 +85,9 @@ class EntryPointIndex:
         self._prefixes = tuple(dict.fromkeys(prefixes))
         self._distribution_identities: dict[
             int, tuple[Distribution, DistributionIdentity]
+        ] = {}
+        self._distribution_files: dict[
+            int, tuple[Distribution, frozenset[Path] | None]
         ] = {}
         self._requirements: dict[int, frozenset[str]] = {}
 
@@ -173,6 +182,41 @@ class EntryPointIndex:
         )
         self._distribution_identities[key] = (distribution, identity)
         return identity
+
+    def distribution_owns_path(self, entry_point: EntryPoint, path: Path) -> bool:
+        """Return whether installed file records verifiably contain ``path``."""
+        if not isinstance(path, Path) or not path.is_absolute():
+            raise ValueError("path must be an absolute pathlib.Path")
+        distribution = entry_point.dist
+        if distribution is None:
+            return False
+        key = id(distribution)
+        cached = self._distribution_files.get(key)
+        if cached is not None:
+            cached_distribution, files = cached
+            if cached_distribution is not distribution:
+                raise AssertionError("entry-point distribution identity collision")
+            return files is not None and path in files
+
+        resolved: frozenset[Path] | None = None
+        try:
+            records = distribution.files
+            if records is not None:
+                owned: set[Path] = set()
+                for record in records:
+                    try:
+                        owned.add(
+                            Path(str(distribution.locate_file(record))).resolve(
+                                strict=True
+                            )
+                        )
+                    except OSError, RuntimeError, TypeError, ValueError:
+                        continue
+                resolved = frozenset(owned)
+        except Exception:  # noqa: BLE001 - unreadable metadata denies ownership.
+            resolved = None
+        self._distribution_files[key] = (distribution, resolved)
+        return resolved is not None and path in resolved
 
 
 @dataclass(frozen=True, slots=True)

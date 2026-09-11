@@ -66,12 +66,14 @@ activation policy, `ElevationRequirement` is a compatibility declaration, and
 managed state paths are namespace conveniences; none of them is a trust boundary or
 sandbox. An elevated application therefore elevates every selected plugin.
 
-Applications must select only trusted code when they run elevated. Keep application
-code, its Python environment, and `plugin_dir` outside locations writable by less
-privileged users. A future execution backend may isolate compatible plugins, so the
-public contract exposes immutable plugin metadata and source records and routes
-callbacks through stable phase IDs. No current plugin should infer that isolation is
-already present.
+Elevated startup is denied unless installed metadata from the concrete goal's owning
+distribution opts in that exact goal class. This is explicit startup consent, not a
+trust decision. Authorized applications must still select only trusted code and keep
+application code, the Python environment, and `plugin_dir` outside locations
+writable by less-privileged users. A future execution backend may isolate compatible
+plugins, so the public contract exposes immutable plugin metadata and source records
+and routes callbacks through stable phase IDs. No current plugin should infer that
+isolation is already present.
 
 Diagnostic extensions are a separate, automatically discovered extension kind.
 Their targets are never imported by the application process. On Linux, an exact

@@ -20,7 +20,9 @@ engulf-encrypt encrypt --key secret.key plaintext.txt ciphertext.bin
 engulf-encrypt decrypt --key secret.key ciphertext.bin restored.txt
 ```
 
-Successful commands exit 0. Invalid command syntax is a rejected goal result with
+Successful commands exit 0. The goal intentionally has no installed privilege
+opt-in, so running the launcher elevated reports `GoalPrivilegeError` on stderr and
+exits 70 before plugins or goal setup run. Invalid command syntax is a rejected goal result with
 exit 2. Missing files, invalid keys/tokens, permissions, and other file or
 cryptography errors are failed goal results with exit 1. Framework, plugin, or
 cleanup failures use exit 70. The output path is replaced when writable; key and
@@ -34,6 +36,9 @@ name without changing the goal.
 A vendor launcher can depend on the core package and derive an edition:
 
 ```python
+import sys
+
+from engulf import FRAMEWORK_ERROR_EXIT, GoalPrivilegeError
 from engulf_encryption_example_core import ENCRYPTION_APPLICATION
 
 VENDOR_APPLICATION = ENCRYPTION_APPLICATION.edition(
@@ -47,8 +52,12 @@ VENDOR_APPLICATION = ENCRYPTION_APPLICATION.edition(
 
 
 def main() -> int:
-    with VENDOR_APPLICATION.create() as application:
-        return application.run()
+    try:
+        with VENDOR_APPLICATION.create() as application:
+            return application.run()
+    except GoalPrivilegeError as error:
+        print(f"vendor-encrypt: {error}", file=sys.stderr)
+        return FRAMEWORK_ERROR_EXIT
 ```
 
 The edition retains the encryption application's identity, declarations, state, and

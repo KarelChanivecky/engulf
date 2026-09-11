@@ -229,6 +229,9 @@ class NormalizingGoal(RecordingGoal):
 
 class ApplicationTestCase(unittest.TestCase):
     def setUp(self) -> None:
+        elevation = patch("engulf.application.is_process_elevated", return_value=False)
+        elevation.start()
+        self.addCleanup(elevation.stop)
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.plugin_directory = Path(self.temporary_directory.name)
@@ -413,7 +416,10 @@ class ApplicationTestCase(unittest.TestCase):
             elevation_requirement=ElevationRequirement.REQUIRED,
             registration=lambda api: elevated_calls.append(api.elevated),
         )
-        with patch("engulf.application.is_process_elevated", return_value=True):
+        with (
+            patch("engulf.application.is_process_elevated", return_value=True),
+            patch("engulf.application.validate_goal_privilege"),
+        ):
             elevated_application = self.make_application(
                 elevated_goal,
                 elevated_required,

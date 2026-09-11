@@ -74,6 +74,11 @@ class _Runner:
 
 
 class DiagnosticExtensionTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        elevation = patch("engulf.application.is_process_elevated", return_value=False)
+        elevation.start()
+        self.addCleanup(elevation.stop)
+
     def test_worker_restores_immutable_trigger_tuples_from_json(self) -> None:
         extension = _diagnostic_extension(
             {

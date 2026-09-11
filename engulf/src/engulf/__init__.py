@@ -25,6 +25,10 @@ from .plugin_loader import (
     parse_plugin_dependency,
     plugin_dependency_entry_point_group,
 )
+from .privilege import (
+    GoalPrivilegeError,
+    goal_privilege_opt_in_entry_point_group,
+)
 from .state import (
     StateHomeContext,
     StateHomeResolver,
@@ -40,6 +44,7 @@ __all__ = [
     "ApplicationDefinition",
     "DiagnosticIsolationConfig",
     "GoalFactory",
+    "GoalPrivilegeError",
     "LogLevel",
     "LogLevelOverrides",
     "LoggingConfig",
@@ -59,6 +64,7 @@ __all__ = [
     "diagnostic_entry_point_group",
     "diagnostic_trigger_entry_point_group",
     "goal_plugin_entry_point_group",
+    "goal_privilege_opt_in_entry_point_group",
     "logging_option_names",
     "parse_plugin_dependency",
     "plugin_dependency_entry_point_group",

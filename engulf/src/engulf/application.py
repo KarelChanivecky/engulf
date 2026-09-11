@@ -76,6 +76,11 @@ from .plugin_loader import (
     validate_goal_plugins,
     validate_plugin_elevation,
 )
+from .privilege import (
+    GoalPrivilegeError,
+    goal_privilege_opt_in_entry_point_group,
+    validate_goal_privilege,
+)
 from .state import (
     InvocationStateManager,
     StateHomeResolver,
@@ -151,9 +156,6 @@ class Application[ResultT]:
                 plugin_declaration_application_ids,
             )
         )
-        self._plugin_directory = (
-            None if plugin_dir is None else resolve_plugin_directory(plugin_dir)
-        )
         self._workspace_root_resolver = workspace_root_resolver
         self._state_home_resolver = state_home_resolver
         isolation_config = (
@@ -170,6 +172,61 @@ class Application[ResultT]:
         self._invocation_active = False
         self._closed = False
 
+        self._elevated = is_process_elevated()
+        privilege_group = goal_privilege_opt_in_entry_point_group(contract.api_major)
+        entry_point_index: EntryPointIndex | None = None
+        if discover_installed or self._elevated:
+            groups: list[str] = [privilege_group]
+            if discover_installed:
+                groups.extend(
+                    application_plugin_entry_point_group(application_id)
+                    for application_id in self._plugin_declaration_application_ids
+                )
+                groups.extend(
+                    (
+                        goal_plugin_entry_point_group(
+                            contract.goal_id,
+                            contract.api_major,
+                        ),
+                        diagnostic_entry_point_group(
+                            contract.goal_id,
+                            contract.api_major,
+                        ),
+                        diagnostic_trigger_entry_point_group(
+                            contract.goal_id,
+                            contract.api_major,
+                        ),
+                    )
+                )
+            try:
+                entry_point_index = EntryPointIndex.discover(
+                    groups,
+                    (plugin_dependency_entry_point_prefix(),)
+                    if discover_installed
+                    else (),
+                )
+            except Exception as error:
+                if self._elevated:
+                    raise GoalPrivilegeError(
+                        f"application {self._display_name!r} cannot start elevated "
+                        f"with goal {contract.goal_id!r} API major "
+                        f"{contract.api_major}: permission metadata is unreadable "
+                        f"({error})"
+                    ) from error
+                raise
+        if self._elevated:
+            assert entry_point_index is not None
+            validate_goal_privilege(
+                cast(Goal[object], goal),
+                contract,
+                application_name=self._display_name,
+                entry_point_index=entry_point_index,
+            )
+
+        self._plugin_directory = (
+            None if plugin_dir is None else resolve_plugin_directory(plugin_dir)
+        )
+
         directory_plugins = (
             ()
             if self._plugin_directory is None
@@ -180,30 +237,6 @@ class Application[ResultT]:
             contract,
             source=f"plugin directory {self._plugin_directory}",
         )
-        entry_point_index: EntryPointIndex | None = None
-        if discover_installed:
-            declaration_entry_point_groups = tuple(
-                application_plugin_entry_point_group(application_id)
-                for application_id in self._plugin_declaration_application_ids
-            )
-            entry_point_index = EntryPointIndex.discover(
-                (
-                    goal_plugin_entry_point_group(
-                        contract.goal_id,
-                        contract.api_major,
-                    ),
-                    *declaration_entry_point_groups,
-                    diagnostic_entry_point_group(
-                        contract.goal_id,
-                        contract.api_major,
-                    ),
-                    diagnostic_trigger_entry_point_group(
-                        contract.goal_id,
-                        contract.api_major,
-                    ),
-                ),
-                (plugin_dependency_entry_point_prefix(),),
-            )
         discovery = discover_plugins(
             self._application_id,
             contract,
@@ -280,7 +313,6 @@ class Application[ResultT]:
                 raise TypeError(
                     f"plugin {item.plugin_id!r} has incompatible goal requirement"
                 )
-        self._elevated = is_process_elevated()
         validate_plugin_elevation(
             self._preprocess_order,
             elevated=self._elevated,

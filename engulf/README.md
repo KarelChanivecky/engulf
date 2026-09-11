@@ -20,7 +20,14 @@ execution seams and are not application or plugin APIs.
 ## Constructing An Application
 
 ```python
-from engulf import ApplicationDefinition, PluginPolicy
+import sys
+
+from engulf import (
+    FRAMEWORK_ERROR_EXIT,
+    ApplicationDefinition,
+    GoalPrivilegeError,
+    PluginPolicy,
+)
 from my_report_goal import ReportGoal
 
 REPORT_APPLICATION = ApplicationDefinition(
@@ -38,8 +45,12 @@ REPORT_APPLICATION = ApplicationDefinition(
 
 
 def main() -> int:
-    with REPORT_APPLICATION.create() as application:
-        return application.run()
+    try:
+        with REPORT_APPLICATION.create() as application:
+            return application.run()
+    except GoalPrivilegeError as error:
+        print(f"report-cli: {error}", file=sys.stderr)
+        return FRAMEWORK_ERROR_EXIT
 ```
 
 `ApplicationDefinition` is immutable and side-effect free. Importing it does not
@@ -613,7 +624,46 @@ policy, either explicitly or through `allow_only(..., include_dependencies=True)
 Implicit activation follows Engulf `PluginDependency` metadata, not Python package
 dependency metadata.
 
-## Elevation
+## Elevated Goal Opt-In
+
+An elevated process may construct an application only when the distribution that
+owns the concrete goal class explicitly opts that class in. Goal implementations
+are opted out by default. Declare consent in the goal implementation distribution,
+not in a launcher or plugin wheel:
+
+```toml
+[project.entry-points."engulf.privilege_opt_in.v1.goal.v1"]
+"com.example.report" = "example_report.goal:ReportGoal"
+```
+
+The first `v1` is the permission format and the second is the goal API major. The
+entry-point name must exactly equal the goal ID. Its target must be the defining
+module and qualified name of the concrete goal class; a declaration for a parent
+class does not authorize a subclass. Use
+`goal_privilege_opt_in_entry_point_group(api_major)` when code needs the exact group
+name.
+
+Engulf reads this declaration without loading its target. It accepts exactly one
+matching declaration after verifying that the declaring distribution's installed
+file records contain the canonical goal module file. A missing, mismatched,
+ambiguous, unreadable, or unverifiable declaration raises `GoalPrivilegeError`
+before plugin-directory resolution, installed plugin loading, endpoint creation,
+diagnostic setup, or goal setup. This check also applies when
+`discover_installed=False`; that switch disables plugin discovery, not permission
+metadata.
+
+Editable installs work only when their installed distribution metadata records the
+goal source file. If the editable backend records only a `.pth` or import hook,
+ownership cannot be established and elevated startup is denied. Engulf does not
+fall back to a checkout's `pyproject.toml`.
+
+Console launchers should catch `GoalPrivilegeError`, write it to stderr, and return
+`FRAMEWORK_ERROR_EXIT` (70), as in the construction example above. There is no
+command-line, environment, application-policy, help, or diagnostic bypass. This is
+startup consent, not package authentication or a sandbox; applications must still
+install only trusted goals and plugins in elevated environments.
+
+## Plugin Elevation Requirements
 
 Plugins declare one `ElevationRequirement`: `NONE`, `OPTIONAL`, or `REQUIRED`.
 Required elevation is validated after discovery and ordering but before goal setup
@@ -639,9 +689,10 @@ callback-bound like the other capabilities. `Application.elevated` exposes the s
 process snapshot to application code. On POSIX elevation means effective UID zero;
 on Windows it means an elevated process token.
 
-This is observation only. Required elevation rejects an incompatible launch, but it
-does not prove that a plugin is trusted or limit other plugins. When the application
-is elevated, all selected plugins are elevated too.
+This is observation only. Goal opt-in authorizes elevated startup, and required
+plugin elevation rejects an incompatible launch; neither proves that code is trusted
+or limits other plugins. When the application is elevated, all selected plugins are
+elevated too.
 
 ## Logging
 
@@ -816,6 +867,7 @@ before invocation:
 
 | Exception | Meaning |
 | --- | --- |
+| `GoalPrivilegeError` | Elevated startup lacks exactly one owned declaration for the concrete goal class. |
 | `PluginLoadError` | Base error for invalid discovery catalogs, targets, exports, declarations, or goal compatibility. |
 | `PluginDependencyError` | Invalid plugin metadata, a missing active dependency, duplicate/self dependency, or ordering cycle. |
 | `PluginElevationError` | A selected `REQUIRED` plugin is incompatible with the process elevation snapshot. |
@@ -831,7 +883,7 @@ The supported top-level `engulf` imports are:
 
 | Area | Names |
 | --- | --- |
-| Application | `Application`, `ApplicationDefinition`, `GoalFactory`, `FRAMEWORK_ERROR_EXIT` |
+| Application | `Application`, `ApplicationDefinition`, `GoalFactory`, `GoalPrivilegeError`, `goal_privilege_opt_in_entry_point_group`, `FRAMEWORK_ERROR_EXIT` |
 | Selection and discovery | `PluginPolicy`, `PluginPolicyMode`, `PluginLoadError`, `PluginDependencyError`, `PluginElevationError`, `PluginRequirementError`, `application_plugin_entry_point_group`, `goal_plugin_entry_point_group`, `plugin_dependency_entry_point_group`, `parse_plugin_dependency` |
 | Inspection | `ActivePlugin`, `PluginSource`, `PluginSourceKind` |
 | Logging | `LogLevel`, `LOG_LEVEL_NAMES`, `LoggingConfig`, `LogLevelOverrides`, `logging_option_names` |

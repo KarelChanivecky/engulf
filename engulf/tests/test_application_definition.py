@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from engulf_api import (
     Goal,
@@ -62,6 +63,11 @@ class StateDefinitionGoal(DefinitionGoal):
 
 
 class ApplicationDefinitionTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        elevation = patch("engulf.application.is_process_elevated", return_value=False)
+        elevation.start()
+        self.addCleanup(elevation.stop)
+
     def test_definition_is_lazy_and_creates_fresh_goals(self) -> None:
         goals: list[DefinitionGoal] = []
 

@@ -171,6 +171,11 @@ can be validated; plugin modules must remain free of import-time side effects.
 runtime, every selected plugin executes in the application process with the same
 authority as the application.
 
+Separately, the `engulf` runtime denies elevated application construction unless
+installed metadata from the concrete goal's owning distribution explicitly opts in
+that exact goal class. This leaves the goal API contract independent of runtime
+permission policy: `GoalContract` and `ElevationRequirement` are unchanged.
+
 The optional universal outer hooks are:
 
 ```python

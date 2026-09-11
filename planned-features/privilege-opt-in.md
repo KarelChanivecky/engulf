@@ -1,6 +1,6 @@
 # Privilege opt-in for goals
 
-Status: planned; implementation has not started.
+Status: implemented.
 
 ## Summary
 
