@@ -16,7 +16,7 @@ constants are:
 | --- | --- |
 | `EXECUTABLE_WRAPPER_GOAL_ID` | `"org.engulf.executable-wrapper"` |
 | `EXECUTABLE_WRAPPER_API_MAJOR` | `1` |
-| `EXECUTABLE_WRAPPER_API_VERSION` | `"1.2.1"` |
+| `EXECUTABLE_WRAPPER_API_VERSION` | `"1.0.0"` |
 
 Plugins that manipulate privileged external resources declare their elevation
 behavior through the generic Engulf contract:

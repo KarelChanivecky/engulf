@@ -32,7 +32,7 @@ Import public contracts from the package top levels (`engulf_api`, `engulf`, and
 `engulf_executable_wrapper_api`). Underscore-prefixed modules and objects are
 implementation details. The API distributions expose independent major-version
 constants, while entry-point groups encode the relevant framework and goal majors.
-The packages are still alpha even where an API contract is already versioned as 1.
+The packages are in beta even where an API contract is already versioned as 1.
 
 `engulf` is not itself a binary wrapper. Wrapping an executable is one possible
 goal, implemented by `ExecutableWrapperGoal`. A goal can instead implement all of

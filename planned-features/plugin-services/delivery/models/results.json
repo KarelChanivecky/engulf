@@ -1,0 +1,33 @@
+{
+  "status": "passed",
+  "checks": {
+    "current_frame": {
+      "ancestor_counterexample_reproduced": true,
+      "resumption_checked": true
+    },
+    "scope_dags": {
+      "directed_graphs_examined": 4096,
+      "acyclic_graphs": 543,
+      "cycle_forming_edge_checks": 2484
+    },
+    "failure_cleanup": {
+      "all_finalizers_attempted": [
+        "A-close",
+        "B-close",
+        "state-destroy",
+        "api-close"
+      ],
+      "first_termination_preserved": true
+    },
+    "snapshots_and_barrier": {
+      "inventory_bytes": 1207491,
+      "small_pages": 320,
+      "batch_failure_cases": 3
+    },
+    "deadlines": {
+      "nested_budget_combinations": 36,
+      "independent_queue_expiry": true,
+      "composite_deadline_and_snapshot_expiry": true
+    }
+  }
+}
