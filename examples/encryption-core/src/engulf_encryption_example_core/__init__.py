@@ -11,7 +11,7 @@ ENCRYPTION_APPLICATION = ApplicationDefinition(
     vendor="Engulf",
     product="Encryption Example",
     short_product_name="Encrypt",
-    version="0.1.0",
+    version="0.1.1",
 )
 
 __all__ = [

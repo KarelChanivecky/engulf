@@ -286,7 +286,7 @@ For executable-wrapper API major 1, package it as:
 ```toml
 [project]
 name = "example-engulf-plugin-inventory"
-version = "0.1.0"
+version = "0.1.1"
 requires-python = ">=3.12"
 dependencies = ["engulf-api>=1.0,<2"]
 
