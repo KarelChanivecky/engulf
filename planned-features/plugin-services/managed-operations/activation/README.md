@@ -12,6 +12,26 @@ existing activation generation and owner lock coordinator. Handler windows have 
 fresh token and the operation they belong to. No process-global current-service
 variable or thread-local state shared across Applications is needed.
 
+The shared callback boundary in `engulf._dispatch` is the sole owner of participant
+activation, frame push, deactivation and frame pop. `_HookRunner` uses it for both
+outer hooks; `_PhaseDispatcher` uses it for every invocation phase, including
+managed targets. `Application` uses the same boundary around `goal.achieve`.
+The hook runner is a separate traversal, not a call through `_PhaseDispatcher`.
+Setup callbacks have no invocation stack. Handler windows are pushed/popped only
+by the operation coordinator.
+
+An ordinary root participant frame needs no operation ID before its first request.
+When projecting `OperationCallFrame` for a request, core supplies the requested
+operation's registered ID along with that participant's current owner/phase facts.
+Do not invent an empty or requestable root-operation identifier to seed the stack.
+
+Ordinary invocation callbacks receive frames even before the first managed request.
+The stack starts empty, the first callback pushes its root participant, and return
+restores the prior top (or empty stack). Clients bind to that actual frame after
+activation. Managed dispatch never pre-activates or pre-pushes a target before
+calling `_PhaseDispatcher`. The detailed cleanup algorithm in the lifecycle page
+is this same boundary, not another wrapper around it.
+
 ```text
 request(client, request):
     require invoking thread == client.owner_thread
@@ -21,16 +41,13 @@ request(client, request):
     reject if an ancestor participant holds a state transaction
     invoke handler in a fresh window using runtime caller facts
 
-dispatch(operation_api, target):
+operation_dispatch_preconditions(operation_api, target):
     require stack.top is operation_api.window
     require operation_api.window is open on the invoking thread
     require target is not an active participant ancestor
     require next managed provider depth <= 32
-    activate target with a fresh generation
-    push participant frame(target)
-    capture endpoint result/failure
-    attempt target deactivation; pop in unconditional cleanup
-    deliver captured outcome without masking the primary error
+    delegate to canonical phase dispatcher
+        # Its shared callback boundary activates/pushes exactly once.
 ```
 
 The 32 limit counts nested managed provider activations, not private handler-window
@@ -70,7 +87,7 @@ claims or acquires anything. The rule applies while inside managed nesting; exis
 unrelated lock semantics and `timeout=None` defaults remain intact.
 
 The registry's user-store read/merge/write occurs under its own explicit finite
-transaction. Sleep's ancestor `eclab-sleep:docker` lease is legal around that call.
+transaction. Reclaim's ancestor `eclab-reclaim:docker` lease is legal around that call.
 The registry cannot acquire another external lease inside it. Holding an outer
 transaction while asking any provider is rejected without waiting.
 
@@ -78,6 +95,8 @@ transaction while asking any provider is rejected without waiting.
 
 | Failure path | Resolution and proof obligation |
 | --- | --- |
+| The first before-goal or goal-originated request finds an empty stack. | Both ordinary entry paths push a frame before exposing the client; C-FRAME tests successful first hops and final empty-stack restoration. |
+| Managed dispatch activates a target twice. | Dispatcher calls the shared boundary once; count generations and endpoint entries in C-FRAME. |
 | Provider callback uses a retained outer `OperationAPI` to dispatch as the handler. | Top handler-window check rejects it; test both local nested calls and close callbacks. |
 | A provider starts a worker with its own client. | Thread check rejects before dispatch. Build workers receive resolved data only. |
 | Lock acquisition fails halfway through descendant activation. | Release only acquired descendant contexts; retain A's leases and preserve the first exception. |

@@ -32,6 +32,10 @@ launch attachments; only the corresponding execution strategy translates them to
 native inheritance settings. Release the redundant host copy after spawn, and all
 resources if spawn never completes. The wrapper retains shared idempotent cleanup
 records so helper failure cannot leak an attachment or cause double closure.
+The execution strategy verifies session-owned allocation records before translating
+attachments. The Unix `pass_fds` set must be a subset of that session's live owned
+descriptors, never merely a tuple of well-formed live integers. W-ENV rejects an
+unrelated open descriptor, including a state/lease lock, before spawn.
 
 The [Unix strategy](../../transport/strategies/posix/README.md) owns `pass_fds`,
 non-inheritable sockets, device/inode checks and reused-fd protection. Windows has

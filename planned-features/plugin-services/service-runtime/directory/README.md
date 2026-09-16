@@ -17,7 +17,9 @@ for contribution in registrations:
 
 freeze directory sorted by provider ID and capability identity
 validate configured defaults and conditional required services
-freeze access policy and optional broker configuration
+validate attributed broker ID against application permitted_broker_ids
+validate transport schema, requested limits and narrowing grants
+freeze access policy, privilege mode and optional broker configuration
 ```
 
 `org.engulf.services.configure` and `org.engulf.services.register` are broadcast setup
@@ -25,6 +27,9 @@ phases. All participants see the same input; contributions are merged only after
 dispatch. Registration does not inspect other contributions. Reject duplicate broker
 configuration rather than choose one by traversal order. Missing broker is ordinary:
 there is simply no child transport configuration.
+`permitted_broker_ids` defaults to empty. A selected configuration provider is not
+authorized by selection alone. A contribution cannot add accepted capabilities,
+raise application limits, opt an executable into child access, or widen grants.
 
 Application-accepted descriptors and codec identities define compatibility. Child
 directory views advertise only permitted capability/major/provider triples and the
@@ -40,11 +45,46 @@ child uses its own policy when it calls dependencies; the dependency is still ow
 by the child's resource scope. This does not grant the child direct dependency
 access or expose the dependency in the child directory.
 
+Child policy also includes the exact method subset and current elevated mode.
+`OpenChild.grants` is a narrowing request against this frozen application ceiling.
+Reject the entire request if any capability/major/provider/method is outside that
+ceiling; do not silently trim it. No scope, endpoint or bootstrap is allocated on
+denial. Broker configuration may narrow that ceiling and lower limits only. The
+resulting intersection is stored with the scope and filters both READY and calls.
+
+Child IPC additionally requires explicit application opt-in for the resolved
+executable/launch contract; a selected broker or an empty grant set is insufficient.
+Empty effective grants disable IPC for the initial delivery. The authorizing
+principal is possession of the inherited connection, not a verified child PID.
+See [endpoint authority](../../transport/endpoints/README.md#connection-authority).
+
+### Elevation
+
+Freeze policy using setup's callback-bound `api.elevated`; no import-time probing.
+Local operations retain the existing plugin elevation checks. `NONE`, `OPTIONAL`
+and `REQUIRED` describe startup compatibility, not distinct OS authority levels:
+all selected code in an elevated process already runs elevated. Do not infer a
+capability grant from `ElevationRequirement`, nor describe a NONE→REQUIRED call
+as crossing an isolation boundary. Optional providers still branch on their own
+callback's `api.elevated` and expose only methods viable in that mode.
+
+Child access is denied under elevation unless application policy explicitly opts
+in that executable and capability/method set in elevated mode. Exact goal-class
+privilege opt-in remains independently required, including for an app-owned goal
+subclass. Helpers, codecs and bindings are trusted composition code, not an audited
+or sandboxed second principal. S-ELEVATION tests elevated refusal/opt-in, REQUIRED
+provider selection, optional behavior and the unprivileged regression path.
+
+### Provider resolution
+
 Resolve an explicit provider, an authorized configured default, or a sole compatible
 authorized provider; otherwise return missing/ambiguous. Defaults are validated at
 setup and again against the particular caller's filtered view. An inaccessible
 default cannot silently grant access or change to another provider. Use an explicit
 typed rejection so configuration mistakes are visible.
+These detailed reasons are local. A wire request outside its advertised exact
+target/method set receives the fixed `not_granted` response before catalog lookup;
+hidden missing/denied/ambiguous/default/readiness distinctions cannot reach a child.
 
 Conditional requirements use immutable selected-plugin IDs from setup. eclab
 requires the registry only when its selected consumers need it. An optional provider

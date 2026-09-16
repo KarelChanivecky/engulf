@@ -86,9 +86,17 @@ child scopes, and local business calls inherit their current scope.
 
 Business deadlines do not erase cleanup obligations. Give each close attempt a
 fresh finite application cleanup budget; dependencies inherit the remainder of that
-close chain. Bound provider count by the selected directory and nested depth by core.
+close chain, capped by the single aggregate finalization deadline described in
+[lifecycle](../../managed-operations/lifecycle/README.md#b-compatibility-and-interruption-policy).
+An explicit child close starts that scope's aggregate budget; later finalization
+cannot restart it. Bound provider count by the selected directory and nested depth by core.
 Synchronous providers still cannot be forcibly timed out. Record exhausted budgets,
 attempt every provider, and retain journals for external recovery.
+
+When `close_scope` raises an ordinary managed cleanup failure to the wrapper helper,
+the wrapper records it and still runs normal `after_call` with the saved child
+outcome. See [child-close handling](../../executable-support/process/README.md#child-close-cannot-bypass-postprocessing).
+Core-driven finalization records the same failure and continues other scopes.
 
 Cleanup acquires fresh owner leases if needed after the original callback has ended.
 If A calls B while A holds an external lease, B cannot acquire another external

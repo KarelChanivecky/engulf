@@ -19,7 +19,7 @@ goal setup:
     freeze accepted directory, codec catalog, policy and optional broker config
     require implemented generic operations
     register one InvocationOperation(
-        id=SERVICE_OPERATION_ID,
+        operation_id=SERVICE_OPERATION_ID,
         phases=(SERVICE_CALL_PHASE, SERVICE_CLOSE_PHASE),
         handler_factory=lambda invocation: ServiceHandler(frozen_setup, invocation)
     )
@@ -45,10 +45,12 @@ remain a separate request variant guarded by actual goal caller kind; they do no
 become capability methods or wire messages. This removes the need for a generic
 control bus or shared-context bootstrap handle.
 
-Local operation handling is available even without the child broker. The optional
-wrapper helper installs this integration in setup; `open()` returns `None` when no
-transport is configured. A plain Python goal can install the same local integration
-without any wrapper imports.
+Local operation handling is available even without the child broker. The local
+`install_services` entry point installs it directly during goal setup; an app-owned
+wrapper subclass can use it without process-support changes. The optional wrapper
+helper is a later alternative setup owner; `open()` returns `None` when no authorized
+child transport is configured. Register once, through one path. Plain Python goals
+use the same local entry point without wrapper imports.
 
 ## Review
 

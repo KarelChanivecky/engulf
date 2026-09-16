@@ -23,11 +23,16 @@ Wire frames cannot represent control variants, caller identities or scope tokens
 handle(request, op_api):
     if private_control(request):
         require actual current goal caller
-        if OpenChild: return create_child_scope(grants, host_session_identity)
+        if OpenChild:
+            require application opt-in for resolved executable and elevated mode
+            require requested grants are a nonempty subset of frozen child policy
+            require broker config/limits can only narrow application authority
+            return create_child_scope(validated_grants, host_session_identity)
         if CloseChild: close_scope(resolve_owned_token(request.token), op_api)
         if ExecuteChild:
             scope = resolve_owned_open_token(request.token)
-            validate child request against that scope's grants
+            validate advertised target/method against scope grants before lookup
+            # Unadvertised targets all return fixed not_granted.
             with request_context(scope, initiating_origin=CHILD):
                 return route(request.business_call, immediate_caller=CHILD, op_api)
     else:

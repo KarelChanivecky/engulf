@@ -58,8 +58,11 @@ descriptor that now has the old number. No validation check turns identity into
 OS isolation or a trust decision.
 
 One client owns each endpoint. Duplicate claims cannot race handshakes or readers.
-The host drops its child-side copy after spawn notification; the child claims the
-inherited endpoint and does not pass it to ordinary descendants. Bind explicit
+The host drops its child-side copy after spawn notification; a cooperating child
+claims the inherited endpoint and marks its owned descriptors non-inheritable.
+Before that claim, or after deliberate delegation, descendants can possess the
+same granted connection. There is no host PID authentication; see
+[connection authority](../../endpoints/README.md#connection-authority). Bind explicit
 proxy child endpoints through the same strategy later.
 
 ## Wrapper binding and readiness
@@ -76,6 +79,6 @@ back to the same resource objects. Child clients use the Unix channel's own boun
 wait method. A timer wakeup still advances protocol deadlines with no ready events.
 
 Acceptance covers actual Python/Go child traffic, stale/reused descriptors,
-identity/family/type mismatch, partial I/O, no child inheritance leak, duplicate
+identity/family/type mismatch, partial I/O, cooperating-client inheritance, duplicate
 claims and every open/spawn/close failure. Do not claim native Windows or all-POSIX
 wrapper behavior from these Linux tests.

@@ -23,6 +23,13 @@ ExecutionSession:
     close(end: ExecutionEnd) -> None
 ```
 
+These interfaces and the opaque resources below are nominal ABCs. `ExecutionSupport`
+has concrete no-op `setup` and an empty `environment_removals` default; `open` is
+abstract. Session lifecycle methods and `launch` are abstract. Optional future
+members require defaults. The removal property is intentionally mode-independent:
+every helper-owned bootstrap name is scrubbed for every launch/completion path.
+Mode-specific opt-in is decided in `open`, not by weakening the removal set.
+
 | Record | Frozen keyword-only fields |
 | --- | --- |
 | `ExecutionPlatformSupport` | `implemented: bool`, `reason: str \| None`, `binding_ids: frozenset[str]`; unavailable means a nonempty reason and no bindings |
@@ -88,5 +95,14 @@ unwind or process reaping/signal restoration as applicable.
 If `stop` or `close` raises, the wrapper still attempts remaining process, resource
 and signal cleanup. First termination has propagation precedence. Generic wrapper failures
 need the generic failure-reporting path discussed in
-[process lifetime](process/README.md). Its compatibility with the real `GoalResult`
-is still a pre-freeze gate; the strategy change does not resolve that separate gap.
+[process lifetime](process/README.md). The proposed `GoalAPI.report_managed_failure`
+contract must pass A-API/W-FAIL before its definitions freeze.
+
+The helper and its strategy bindings are trusted application composition code,
+with the goal's OS authority. Exact goal-class elevation opt-in is startup consent;
+it does not audit constructor arguments or isolate selected plugins. The application
+must source helpers/codecs/bindings from the same trusted installation as its goal.
+The wrapper validates native attachments against session-owned allocation records;
+on Unix, the resulting `pass_fds` set contains only those live owned descriptors.
+An unrelated live descriptor or foreign-session attachment is rejected before spawn.
+These checks prevent accidental resource leaks, not malicious in-process Python.

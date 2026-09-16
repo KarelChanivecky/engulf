@@ -27,6 +27,10 @@ it cannot be called recursively. Preserve packaging order for early consumers.
 
 ## Pseudocode
 
+`_PhaseDispatcher` delegates participant entry/exit to the shared callback boundary
+described in [activation](../activation/README.md). The operation coordinator only
+validates the managed window and target set. It never activates a target itself.
+
 ```text
 operation_dispatch(window, supplied_phase, event, targets):
     require_current_handler_window(window)
@@ -67,6 +71,9 @@ returning control to the optional handler. A handler cannot turn a caught provid
 defect into an unlatched domain success. If an inner operation already carries C's
 failure through B, do not wrap it as B, then A. Preserve identity/origin and add
 diagnostic traversal information without inventing a new originating provider.
+Only runtime-minted provenance from this invocation is preserved. A plugin raising
+a hand-built `OperationFailure` or `PluginCallbackError` cannot choose its origin;
+attribute that new exception to the endpoint currently executing.
 
 Activation, deactivation and endpoint infrastructure defects may have no provider
 callback origin. Record them honestly as managed infrastructure failures; do not

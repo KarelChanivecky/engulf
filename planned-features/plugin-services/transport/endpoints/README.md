@@ -31,9 +31,27 @@ claim lock and idempotent release record; generic client code never closes a raw
 fd/handle or inspects its identity fields.
 
 The strategy releases the redundant child-side host copy after spawn notification,
-and every owned endpoint on failure paths. The concrete backend prevents ordinary
-subprocess creation from accidentally sharing the stream with descendants.
+and every owned endpoint on failure paths. Once a cooperating client claims the
+endpoint it marks its descriptors non-inheritable, preventing accidental inheritance
+through ordinary exec-based subprocess creation. This is client cooperation.
 Explicit proxies are required for supported descendant access.
+
+## Connection authority
+
+Grants attach to whoever possesses the inherited connection. The host does not
+authenticate the writer's PID with socketpair peer credentials. An uncooperative
+child may retain inheritance, fork, or transfer the descriptor to another process;
+that process obtains the same connection grants. Client non-inheritance flags do
+not prevent deliberate delegation or fork-only sharing.
+
+Require application opt-in for the resolved executable/launch contract before
+OpenChild. Shells and shell shims are not implicitly opted in by their eventual
+command. With no opt-in or no grants, pass no endpoint and create no child scope.
+If an application explicitly opts in a delegating launcher, it accepts that its
+descendants may hold the connection; v1 cannot promise host-enforced containment.
+T-AUTH includes an unopted `sh -c` launcher with no endpoint and a cooperating-client
+inheritance check. A future stronger peer/descendant boundary needs a different
+transport/security contract, not a claim added to the socketpair strategy.
 
 ## Synchronous client and queue
 

@@ -29,3 +29,12 @@ The model uses synthetic records, in-memory state and explicit fake time. It doe
 cleanup, signals, allocation bounds or wire interoperability. Those require the
 real [acceptance tests](../verification.md). Its purpose is to reject inconsistent
 algorithms before they become a public contract.
+
+S24 narrows the claims above: the dictionary-overlay latch/value example and the
+failed-batch deletion branches explicitly construct their desired outcomes. Treat
+them as illustrations, not independent tests of a failure-merging or persistence
+policy. The graph enumeration and current-frame counterexample remain useful finite
+checks. No model here exercises the revised goal reporting, real frame entry,
+conditional observation bases, final recency validation or install compatibility;
+all corresponding implementation gates remain required even when this script prints
+`status: passed`.

@@ -12,7 +12,8 @@ before_goal(invocation, api):
     registry = typed registry client built from services(api)
     repeat while polling:
         try:
-            inventory = registry.records()           # new persisted snapshot each time
+            baseline = registry.snapshot()          # before sampling; new every poll
+            inventory = baseline.records
             inventory_complete = true
         except expected registry availability/size errors:
             inventory = unavailable
@@ -20,8 +21,9 @@ before_goal(invocation, api):
             warn using own callback logger
         sample Docker/workspace observations using explicit completeness flag
         render measurement; unknown ownership-dependent quantities are N/A
-        if sample contains complete observations:
-            try: registry.commit_observations(sample.observations)
+        if inventory_complete and sample contains complete observations:
+            try: registry.commit_observations(sample.with_bases_from(baseline))
+            except observation_conflict: warn; discard sample's writes
             except expected commit error: warn
         wait existing two-second reporting interval or finish
     return existing command result
@@ -37,6 +39,11 @@ Only complete Docker observations may replace recorded image IDs. Partial Docker
 failure does not turn unknown ownership into an empty image set. Commit expected
 failures warn; unexpected managed provider defects retain framework failure rather
 than being swallowed as a transient polling warning.
+An unknown baseline permits measurement but no registry replacement. A complete
+sample is not necessarily recent: the provider checks pre-sample record bases in
+the commit transaction. A conflict waits for a fresh sample on the next iteration,
+not a retry of the stale observation. R-FRESH coordinates a newer deploy commit
+between sampling and consumption's write and verifies that its image set survives.
 
 The local client can be reused during this one long-lived callback; every provider
 request gets a fresh owner API. Release each bounded registry snapshot before the

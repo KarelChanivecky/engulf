@@ -18,7 +18,7 @@ implements the existing process behavior; Windows is explicitly unavailable.
 | Preparation failure | Preparer's own unwind, successful preparers' reverse `prepare_failed`, then session stop/close; no `after_call` |
 | Spawn failure | Narrow executable-resolution/`Popen` translation to 127/126; stop/close session, dispatch real `SPAWN_FAILED` outcome |
 | Spawn success | Wrapper retains the only strategy-owned process; strategy attaches signal forwarding, then helper gets PID and pump starts |
-| Child exit | Stop ingress, reap, restore temporary signal handlers, close child resources, then `after_call` with actual outcome |
+| Child exit | Save actual outcome, stop ingress, reap, restore signals, attempt child-scope/session/resource close, then `after_call` despite ordinary close failures |
 | Ordinary infrastructure defect | Revoke transport, retain managed failure, continue waiting/reaping the child; no automatic child kill |
 | Termination in helper/provider | Stop ingress, terminate the direct child, reap, restore signals, exhaust cleanup, re-raise first termination |
 
@@ -83,7 +83,7 @@ after_call receives actual CallOutcome(exit_code=child_exit, ...)
 
 if execution_failure exists:
     record failure in core's accumulator through an explicit goal-side boundary
-        # PRE-FREEZE GAP: this boundary still needs a concrete generic API contract.
+        goal_api.report_managed_failure(error, stage=qualified_support_stage)
     return GoalResult(status=FRAMEWORK_FAILED, exit_code=70,
                       value=actual_outcome, error=bounded_error_text)
 ```
@@ -100,16 +100,35 @@ still propagates after cleanup. Without a pending managed failure, retain the
 existing after-call exception behavior.
 
 Resolving that goal-side reporting API is an explicit A freeze gate, separate from
-the platform-strategy decision. Tests must use real `GoalResult` objects and
+the platform-strategy decision. Its proposed signature/provenance rules now live in
+[operation contracts](../../managed-operations/contracts.md#goal-side-reporting-and-provenance).
+Tests must use real `GoalResult` objects and
 exercise the path with a generic fake helper, with no services installed, and with
 an outer hook that attempts to return success.
 The wrapper must validate that the failure arose on an enabled support path;
 ordinary process exit codes do not create managed defects.
 
+### Child close cannot bypass postprocessing
+
+Save the real `CallOutcome` as soon as process completion is known. Attempt each
+child-scope, session and native-resource close independently. On an ordinary close
+failure, report it through the goal API (an authentic provider failure keeps its
+origin) and continue to `after_call` with that saved outcome. This also applies to
+stop/close failures following a real `SPAWN_FAILED` call. Preparation failure still
+has no call and dispatches no `after_call`. Termination follows exhaustive cleanup
+and propagation, without promising normal postprocessing.
+
+If `after_call` also fails, keep the first reported defect, record the secondary,
+and return the saved outcome with textual framework failure. A close failure must
+never escape the ordinary path before the wrapper constructs this result. Core then
+captures it inside the goal boundary before goal deactivation. W-FAIL covers both
+child close failure before `after_call` and goal-frame teardown failure after return.
+
 ## Recursive review
 
 Inject failures into `open`, strategy binding/launch validation, `spawned`, wait setup,
-`interests`, `step`, `stop`, `close`, preparer self-unwind and another preparer's
+`interests`, `step`, `stop`, child-scope close, session `close`, goal-frame teardown,
+preparer self-unwind and another preparer's
 unwind. Assert one process owner, no zombies, all descriptors closed, real
 `after_call` outcome, no after-call for failed preparation, original termination,
 and no support methods called on the disabled path. Use pipes/barriers and PTY

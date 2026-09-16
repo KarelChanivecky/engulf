@@ -5,6 +5,10 @@ This directory is the active design workspace. It expands the plans and reviews 
 recursive design reviews. It describes proposed work; it does not claim that the
 interfaces or services exist in the current runtime.
 
+The [v4 critique assessment](critique-response.md) records S1–S28, source corrections,
+adopted changes and remaining implementation gates. The active pages incorporate
+that assessment; the incoming critique and seed documents remain historical input.
+
 The architectural center is **owner-dispatched work**: a consumer asks a managed
 operation to invoke a selected provider through Engulf's existing execution
 endpoint. The provider receives its own callback API, state namespace, diagnostics,
@@ -18,7 +22,7 @@ The user confirmed both choices below. They are requirements, not open alternati
 | Delivery | Result | Explicit stop point |
 | --- | --- | --- |
 | **A — foundation** | Publish additive generic operation and wrapper-support definitions with explicitly unavailable runtime stubs. Update owned package versions and dependency floors while retaining framework and goal catalog majors. | All existing behavior works with the upgraded package set. Operations report unavailable; supplying wrapper support fails immediately. Services need never be implemented. |
-| **B — services** | Implement the generic runtime, optional services packages, local eclab migrations, then direct-child transport. | Each consumer gate proves real ownership, failure, cleanup, and compatibility semantics. Proxies are a separately gated follow-on. |
+| **B — services** | Generic runtime and local services first (B1/B3/B4/B5); process support and child transport follow separately (B2/B6). | Each milestone has ownership, failure, cleanup and compatibility gates; IPC also needs an explicit child consumer and grants. Proxies follow later. |
 
 The user also requires OS-specific behavior to live behind a **strategy pattern**,
 with an explicitly unavailable Windows strategy. This does not require a working
@@ -43,7 +47,7 @@ linked subcomponent pages own the detailed contracts and pseudocode.
 | [Service runtime](service-runtime/README.md) | Attributed directory, access/readiness, local routing, invocation/child scopes and dependency cleanup | OS process ownership or domain image ranking |
 | [Executable support](executable-support/README.md) | Generic helper seam, process strategy, wrapper lifecycle, environment and completion integration | Service protocol parsing or business calls |
 | [Transport](transport/README.md) | Transport strategy, private child endpoint, framed protocol, bounded pump/client, later explicit proxies | Plugin activation, automatic discovery or retry |
-| [eclab adoption](eclab/README.md) | Application composition and registry, consumption, sleep, image-provider migrations | Core service policy or new framework catalogs |
+| [eclab adoption](eclab/README.md) | Application composition and registry, consumption, reclaim, image-provider migrations | Core service policy or new framework catalogs |
 | [Delivery and verification](delivery/README.md) | Package manifest, staged gates, compatibility matrix, conformance and release preparation | Publishing packages as part of this documentation task |
 
 ## Dependency direction
@@ -151,13 +155,40 @@ not depend on it.
    bounded steps on the invocation thread. Synchronous provider execution is
    cooperative and can exceed a deadline; polling intervals are not hard bounds.
 8. Acknowledged registry writes have reached the completed state transaction before
-   sleep begins deletion. Unknown inventory, partial page reads, or failed commit
-   acknowledgment permit no deletion. This is not an atomic Docker/filesystem
-   transaction.
+   reclaim begins deletion. Unknown inventory, partial page reads, or failed commit
+   acknowledgment permit no deletion. Writes compare pre-sample record bases; a
+   changed inventory at the final recency check also permits no deletion. A complete
+   snapshot can still become stale after that check releases its transaction;
+   registry and Docker are not atomic.
 9. Generic contracts carry opaque launch attachments and wait resources, never
    native fd/handle layouts. Platform strategies translate these at the OS boundary.
    Windows IPC unavailability cannot disable local service registration or calls;
    there is no automatic TCP fallback or success-shaped dummy connection.
+
+Child grants always narrow frozen application policy, including elevated mode and
+explicit executable opt-in. A connection's authority belongs to its descriptor
+holder and can be delegated by the child; v1 provides no host-enforced descendant
+containment. Empty grants create no endpoint. The configuration-only broker is not
+the separate privileged broker described in the core operator guide.
+
+## Vocabulary and lifetimes
+
+| Term here | Meaning / lifetime |
+| --- | --- |
+| Runtime capability | A callback-bound API/state/lease handle; unusable after callback or while its owner is suspended where current-frame checks apply |
+| Service capability | A domain descriptor identified by ID and major; immutable application configuration |
+| Execution frame | One currently executing participant or handler window; stacked for synchronous nested calls |
+| Service scope | Invocation or child resource lifetime with a dependency DAG; distinct from filesystem StateScope |
+| ServiceCallContext | Immutable call facts and remaining authority/budget; not shared invocation context storage |
+| Goal phase | Stable endpoint dispatch identity and order; service readiness is separate state |
+| Broker | Selected child-transport configuration plugin; no privilege separation |
+
+The existing sequence diagram shows the lifetime nesting: an Application owns frozen
+definitions; each invoke owns handlers and an invocation scope; callbacks/handler
+windows nest within it; a child scope closes before after_call while invocation
+services survive through after_goal. Provider preparation maps may become unready
+earlier, as the image contract specifies. These distinct lifetimes must not be
+collapsed into one service-active boolean.
 
 ## Refinements beyond the seeds
 

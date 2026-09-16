@@ -39,8 +39,8 @@ evidence is indexed in [evidence.md](evidence.md); acceptance IDs refer to the
 | --- | --- | --- | --- |
 | R19 | A valid inventory larger than one frame makes local/wire-equivalent `records()` fail as a provider defect. | Bounded domain snapshot pages; complete-inventory facade and explicit single-record limits. [Snapshots](eclab/lab-registry/snapshots/README.md). | R-PAGE |
 | R20 | Independent pages observe different versions, or polling leaves snapshots allocated. | Immutable per-read snapshot, bounded caller/count/bytes, explicit/finally/scope release. Same snapshot page. | R-PAGE, R-POLL |
-| R21 | Batched commits acknowledge a prefix and sleep starts deleting. | Complete commit facade returns only after every acknowledgment; later failure means zero deletion, no rollback claim. [Sleep](eclab/sleep/README.md). | R-SLEEP |
-| R22 | Corruption or a failed page is passed as empty inventory, distorting ownership and deletion safety. | Explicit unknown completeness; N/A for affected consumption values, zero deletion for sleep. [Consumption](eclab/consumption/README.md). | R-POLL, R-SLEEP |
+| R21 | Batched commits acknowledge a prefix and reclaim starts deleting. | Complete commit facade returns only after every acknowledgment; later failure means zero deletion, no rollback claim. [Reclaim](eclab/sleep/README.md). | R-SLEEP |
+| R22 | Corruption or a failed page is passed as empty inventory, distorting ownership and deletion safety. | Explicit unknown completeness; N/A for affected consumption values, zero deletion for reclaim. [Consumption](eclab/consumption/README.md). | R-POLL, R-SLEEP |
 | R23 | Provider map exists from a previous invocation or was cleared after-call although basic entered status remains true. | Method readiness is owner-specific; reset/populate/clear maps on existing preparation paths. [Images](eclab/image-providers/README.md). | I-OFFER |
 | R24 | Moving to generic ID order changes image tie precedence or mistakes synthetic pull for a plugin. | Keep explicit image-domain preference/ties and existing resolver cache/fallback; current source inventory lists actual wrapper IDs. Same image page. | I-OFFER |
 | R25 | 32 MiB is claimed after an unbounded decoder already allocated data; tiny progress keeps a peer alive forever. | Account before allocation; bound frames/nodes/strings; absolute progress deadlines; distinguish charged storage from RSS. [Pump](transport/pump/README.md). | T-BOUND |
@@ -63,9 +63,19 @@ stubbed. A working Windows IPC backend is not an implementation prerequisite.
 | R34 | A freezes raw `pass_fds` and `fd` fields as universal launch/readiness contracts. | Replace them before publication with opaque owned attachments/wait resources and a support snapshot. Native bindings remain in concrete adapters. [Contracts](executable-support/contracts.md). | A-STRATEGY, W-STRATEGY |
 | R35 | Windows selects the Unix implementation, allocates scope/resources before failing, or silently treats stub `None` as disabled transport. | Fixed lazy Windows strategy; explicit typed unavailability before allocation, no fallback, local calls independent. [Windows stub](transport/strategies/windows/README.md). | T-PLATFORM, T-WINDOWS |
 | R36 | Stale bootstrap chooses a foreign backend, or wrapper/helper double-close copied native handles. | Bounded backend-tagged metadata checked against local strategy; shared idempotent resource ownership and opaque bindings. [Endpoints](transport/endpoints/README.md). | T-STRATEGY, W-STRATEGY |
-| R37 | Draft puts `OperationFailure` in `GoalResult.error`; actual API requires text, and dictionary-based models miss the mismatch. | Withdraw the invalid carrier example, preserve `str \| None`, and require a concrete goal-side reporting contract with real API consumers before A freeze. [Process](executable-support/process/README.md). | W-FAIL; unresolved contract gate |
+| R37 | Draft puts `OperationFailure` in `GoalResult.error`; actual API requires text, and dictionary-based models miss the mismatch. | Withdraw the invalid carrier; pass 5 proposes `GoalAPI.report_managed_failure` with runtime provenance and real API consumers. [Contracts](managed-operations/contracts.md#goal-side-reporting-and-provenance). | A-API, W-FAIL; implementation/freeze verification pending |
 
 ## Abstractions retained, reduced or deferred
+
+Pass 5 applies the new external S1–S28 critique; the
+[assessment and disposition table](critique-response.md) records every finding,
+source correction, owning page and gate. R16/R37 now have the proposed
+`GoalAPI.report_managed_failure` contract; their A-API/W-FAIL tests remain open.
+R01/R05/R06/R30 now share one callback boundary, capture values before teardown,
+consume destruction outcomes explicitly and specify ordinary child-close failures.
+R28 uses local goal setup independently of the process helper. R19–R22 now include
+conditional observation bases and a final inventory recency check. None of these
+documentation resolutions claims a working B runtime.
 
 | Choice | Reason |
 | --- | --- |
@@ -88,8 +98,8 @@ registry/Docker mutations are not atomic; charged memory is not process isolatio
 an A API freeze can still need later compatible refinement. These are explicit
 limits, not unresolved promises hidden by pseudocode.
 
-An unresolved pre-freeze contract is goal-side managed failure reporting with the
-real `GoalResult` text field (R37). The strategy design does not claim to close it.
+The goal-side failure-reporting design now has a concrete proposed signature and
+provenance rule (R37/S1/S14); real API consumers and W-FAIL still gate its freeze.
 Implementation-gated choices are bounded-parser implementation, measured descriptor
 and recipe fixture sizes, actual unused release versions, additional owned downstream
 roots, and whether a later capability needs per-descendant host resource scopes.

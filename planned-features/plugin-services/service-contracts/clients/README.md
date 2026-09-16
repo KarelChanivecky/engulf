@@ -7,6 +7,27 @@ the stable service operation ID and immutable request/reply envelopes; it import
 no router, live provider class or application runtime. Typed capability clients
 wrap it with the domain's encode/decode and method signatures.
 
+The public entry point is
+`engulf_services_api.services(api: engulf_api.InvocationAPI) -> ServiceClient`.
+`ServiceClient` is a nominal API-owned facade with
+`providers(capability: CapabilityDescriptor) -> tuple[ProviderHandle, ...]` and
+`require(capability: CapabilityDescriptor, provider_id: str | None = None) -> ProviderHandle`.
+`ProviderHandle` exposes frozen `provider_id`, `capability` and `method_ids` fields;
+its private callback client is installed only by the facade, not accepted as a
+caller-supplied identity. `call(method: str, value: object, budget: float | None = None)
+-> object` is the low-level escape hatch; typed domain clients own typed signatures.
+Budgets must be positive finite seconds, excluding booleans, and are clamped by host
+policy. Descriptor-selected codec bindings remain API-owned local code.
+
+`services` checks `api.operations.support` immediately. A maps to
+`ServiceUnavailableError(code="runtime_unavailable", message=...)`; a B runtime
+without the service operation maps its `unknown_operation` response on first use to
+`ServiceUnavailableError(code="operation_not_registered", message=...)`.
+Both use actionable text naming the needed application integration. Other lifetime,
+request and managed failures retain their categories. There is no silent fallback.
+Define this error and the facade at the package top level; do not import the runtime
+to probe availability. S-AUTHOR type-checks these definitions with a real A stub.
+
 ## Resolution and calls
 
 ```text
@@ -54,8 +75,18 @@ RPC rejection; catching it does not clear core's failure latch. Python child cli
 also expose client-only endpoint-absent, channel-closed and uncertain-outcome errors.
 Those are not invented server error replies.
 
+Managed diagnostics must render the runtime origin and ordered call chain, plus the
+fact that catching the error did not clear the invocation failure. Emit this when
+the failure is latched, not only at exit 70. Avoid payloads and repeat diagnostics.
+For child calls, host diagnostics include the invocation identity, host-local
+connection ordinal and existing wire request ID; wire replies retain that request
+ID, so a new correlation field is unnecessary in v1. S-OBS verifies the rendered
+provider identity and chain survive the wrapper and outer hooks. Live scope
+introspection is deferred to a future sanitized diagnostic snapshot, not an
+invitation for isolated diagnostic workers to import providers.
+
 Consumption may catch expected registry errors, log a warning and report unknown
-measurements. Sleep may catch them and return failure with zero deletion. Neither
+measurements. Reclaim may catch them and return failure with zero deletion. Neither
 consumer should catch every `RuntimeError` and continue as though inventory were
 empty. There is no legacy context fallback when services are missing.
 

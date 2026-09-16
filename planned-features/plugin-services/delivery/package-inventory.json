@@ -1,56 +1,61 @@
 {
-  "purpose": "Source inventory for proposed release planning; no versions changed or index availability verified.",
+  "captured_utc": "2026-09-15T05:29:21.637504+00:00",
+  "purpose": "Refreshed source observations after the v4 critique; no package metadata changed and no index availability verified. Supersedes the previous inventory; release planning must refresh again.",
+  "repository_heads": {
+    "engulf": "4c7e95e68d822c17151633e1bef9e0dd197e2b26",
+    "engulf-clab": "f8c906317fc74a6ecae8c40866fb6571062b6189"
+  },
   "packages": [
     {
       "repository": "engulf",
       "path": "engulf-api/pyproject.toml",
       "name": "engulf-api",
-      "version": "1.3.0",
+      "version": "1.0.0",
       "requires_python": ">=3.14",
       "dependencies": [],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "c4a8a94214a916d0eb3ebfdc62bbb0adcb46e999a08233a60fe4f87401338d81"
+      "sha256": "40445b9742c44262fd8eadcae5b639ca4fea31fc161b6fb78e6b539e7d26d1a1"
     },
     {
       "repository": "engulf",
       "path": "engulf-executable-wrapper-api/pyproject.toml",
       "name": "engulf-executable-wrapper-api",
-      "version": "1.2.1",
+      "version": "1.0.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2"
+        "engulf-api>=1.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "496abce03d8418d4db4823e3ee1020a06f07a139726c26d124c209ec8b408062"
+      "sha256": "b2c6e238f908c824921b69ee19cf157b9e52369acdae0098f078071a75e46b00"
     },
     {
       "repository": "engulf",
       "path": "engulf-executable-wrapper/pyproject.toml",
       "name": "engulf-executable-wrapper",
-      "version": "0.3.0",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf>=0.3,<1",
-        "engulf-executable-wrapper-api>=1.2,<2"
+        "engulf>=0.1,<1",
+        "engulf-executable-wrapper-api>=1.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "e1b10b4ab270385ca075e919311501015ea5bacaac50b208a1246aae4686368c"
+      "sha256": "436e1daead26c91603b74c04090965b167a15b7b160bdaf13b936c0735ba4f96"
     },
     {
       "repository": "engulf",
       "path": "engulf/pyproject.toml",
       "name": "engulf",
-      "version": "0.3.0",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.3,<2"
+        "engulf-api>=1.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "f6ec388c91c72f79d7568a68c3fbb0fcb694de38a4757c8eebf013f797563333"
+      "sha256": "c533109f2d4658f11f91fcdff508ce02e148e2e4d61d01539880d3cf79dbc661"
     },
     {
       "repository": "engulf",
@@ -63,7 +68,7 @@
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "e578bff45dff2279745807e7c444e01d9cf20053e640814dd13a3651f615a181"
+      "sha256": "ec34440d554dd707323b74505b049a192f5fe53c2dd70ac2e4fc5bbc211397ef"
     },
     {
       "repository": "engulf",
@@ -77,13 +82,13 @@
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "24ccb180bd99956d2334708827e738ae61fc551a1929c5dab1b4cb2ed36c9a32"
+      "sha256": "2b6ef27772a7b85adb60c9a409db5df58a3e6978123ff6e25f4336dec10fc612"
     },
     {
       "repository": "engulf",
       "path": "plugins/engulf-plugin-list/pyproject.toml",
       "name": "engulf-plugin-list",
-      "version": "0.1.1",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
         "engulf-api>=1.0,<2"
@@ -97,134 +102,134 @@
           "--engulf-plugin-list": "engulf_plugin_list:diagnostic"
         }
       },
-      "sha256": "e09e4bba1b5eacf83fb39d7435ab76034f6408dff1f084fe17702cce2a9e6581"
+      "sha256": "10a99acd404a24b846a7de7138aeb9b2bde0ef3f4c05f7a5c9c7e0ec8917da9b"
     },
     {
       "repository": "engulf-clab",
       "path": "demo-lab/pyproject.toml",
       "name": "engulf-clab-demo-lab",
-      "version": "0.5.0",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-clab>=0.3.0,<1",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-freeze-api>=1,<2",
-        "engulf-clab-pki-api>=2,<3",
-        "engulf-docker-image-api>=1.4.0,<2",
-        "engulf-docker-image-core>=1.4.0,<2",
-        "engulf-clab-containers-api>=1.2.0,<2",
-        "engulf-clab-lab-parser>=0.2.0,<1",
-        "engulf-clab-lab-writer>=0.2.0,<1",
-        "engulf-clab-ensure-checkout>=0.2.0,<1",
-        "engulf-clab-ensure-containerlab>=0.3.0,<1",
-        "engulf-clab-image-build>=0.2.1,<1",
-        "engulf-clab-dockerfile-build>=0.3.0,<1",
-        "engulf-clab-image-archive>=0.3.0,<1",
-        "engulf-clab-containers>=0.4.0,<1",
-        "engulf-clab-containers-core>=0.3.0,<1",
+        "engulf-clab>=0.1.0,<1",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-freeze-api>=1.0,<2",
+        "engulf-clab-pki-api>=1.0,<3",
+        "engulf-docker-image-api>=1.0.0,<2",
+        "engulf-docker-image-core>=1.0.0,<2",
+        "engulf-clab-containers-api>=1.0.0,<2",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-writer>=0.1.0,<1",
+        "engulf-clab-ensure-checkout>=0.1.0,<1",
+        "engulf-clab-ensure-containerlab>=0.1.0,<1",
+        "engulf-clab-image-build>=0.1.0,<1",
+        "engulf-clab-dockerfile-build>=0.1.0,<1",
+        "engulf-clab-image-archive>=0.1.0,<1",
+        "engulf-clab-containers>=0.1.0,<1",
+        "engulf-clab-containers-core>=0.1.0,<1",
         "engulf-clab-containers-pki>=0.1.0,<1",
-        "engulf-clab-freeze>=0.4.0,<1",
-        "engulf-clab-pki>=0.3.0,<1",
-        "engulf-clab-pki-linux-core>=0.1.1,<1",
-        "engulf-clab-pki-linux-debian>=0.1.1,<1",
-        "engulf-clab-pki-linux-fedora>=0.1.1,<1"
+        "engulf-clab-freeze>=0.1.0,<1",
+        "engulf-clab-pki>=0.1.0,<1",
+        "engulf-clab-pki-linux-core>=0.1.0,<1",
+        "engulf-clab-pki-linux-debian>=0.1.0,<1",
+        "engulf-clab-pki-linux-fedora>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "8c59f0cd2e52993502827b4e5836f4dd9cd3650147b247ad18ea8c9201a797d6"
+      "sha256": "6471538068928b4843a3cb3622c771e933be50d89709a4425cbe53cda1e1a5da"
     },
     {
       "repository": "engulf-clab",
       "path": "engulf-clab/pyproject.toml",
       "name": "engulf-clab",
-      "version": "0.3.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf>=0.3,<1",
-        "engulf-executable-wrapper>=0.3,<1"
+        "engulf>=0.1,<1",
+        "engulf-executable-wrapper>=0.1,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "7622d54f692d4bf52c83a3d71cf85a46279df7587ffde7c77b465841754e3bab"
+      "sha256": "e1a86f2e51c6272d717a496394044803089fce8e601cc6efd1788858ecbbbaf7"
     },
     {
       "repository": "engulf-clab",
       "path": "mcp-server/pyproject.toml",
       "name": "engulf-clab-mcp",
-      "version": "0.1.5",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-clab>=0.3.0,<1",
+        "engulf-clab>=0.1.0,<1",
         "engulf-plugin-list>=0.1,<1",
         "mcp>=1.26,<2",
         "PyYAML>=6.0"
       ],
       "optional_dependencies": {
         "all-plugins": [
-          "engulf-clab-all-plugins>=0.6.1,<1"
+          "engulf-clab-all-plugins>=0.1.0,<1"
         ]
       },
       "entry_points": {},
-      "sha256": "0e3a81780e7a02225b661c5387bb011847c34e6799990e30242a3b44c81c23b7"
+      "sha256": "8ec01f88092cdffdf5c727b301e49c3b1f97a2d8f0663e0bad0a7717b61c4656"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-all-plugins/pyproject.toml",
       "name": "engulf-clab-all-plugins",
-      "version": "0.8.5",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-develop-eclab-lab>=0.2.0,<1",
-        "engulf-docker-image-api>=1.4.0,<2",
-        "engulf-docker-image-core>=1.4.0,<2",
-        "engulf-clab-image-build>=0.2.3,<1",
-        "engulf-clab-image-archive>=0.3.2,<1",
-        "engulf-clab-containers-api>=1.2.0,<2",
-        "engulf-clab-containers>=0.4.2,<1",
-        "engulf-clab-containers-core>=0.3.2,<1",
+        "engulf-clab-schema-api>=1.0.0,<2",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-develop-eclab-lab>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2",
+        "engulf-docker-image-core>=1.0.0,<2",
+        "engulf-clab-image-build>=0.1.0,<1",
+        "engulf-clab-image-archive>=0.1.0,<1",
+        "engulf-clab-containers-api>=1.0.0,<2",
+        "engulf-clab-containers>=0.1.0,<1",
+        "engulf-clab-containers-core>=0.1.0,<1",
         "engulf-clab-containers-pki>=0.1.0,<1",
-        "engulf-clab-license-pool>=0.3.2,<1",
-        "engulf-clab-freeze>=0.4.0,<1",
-        "engulf-clab-lab-registry-api>=1,<2",
-        "engulf-clab-lab-registry>=0.1.1,<1",
-        "engulf-clab-sleep>=0.1.1,<1",
-        "engulf-clab-consumption>=0.2.0,<1",
-        "engulf-clab-freeze-api>=1,<2",
-        "engulf-clab-pki-api>=2,<3",
-        "engulf-clab-pki>=0.3.2,<1",
-        "engulf-clab-pki-linux-core>=0.1.1,<1",
-        "engulf-clab-pki-linux-debian>=0.1.1,<1",
-        "engulf-clab-pki-linux-fedora>=0.1.1,<1",
-        "engulf-clab-vrnetlab-fortigate-pki-injector>=0.2.2,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-lab-writer>=0.2.2,<1",
+        "engulf-clab-license-pool>=0.1.0,<1",
+        "engulf-clab-freeze>=0.1.0,<1",
+        "engulf-clab-lab-registry-api>=1.0.0,<2",
+        "engulf-clab-lab-registry>=0.1.0,<1",
+        "engulf-clab-reclaim>=0.1.0,<1",
+        "engulf-clab-consumption>=0.1.0,<1",
+        "engulf-clab-freeze-api>=1.0,<2",
+        "engulf-clab-pki-api>=1.0,<3",
+        "engulf-clab-pki>=0.1.0,<1",
+        "engulf-clab-pki-linux-core>=0.1.0,<1",
+        "engulf-clab-pki-linux-debian>=0.1.0,<1",
+        "engulf-clab-pki-linux-fedora>=0.1.0,<1",
+        "engulf-clab-vrnetlab-fortigate-pki-injector>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-writer>=0.1.0,<1",
         "engulf-clab-sticky-ip>=0.1.0,<1",
-        "engulf-clab-dockerfile-build>=0.3.2,<1",
-        "engulf-clab-ensure-containerlab>=0.3.0,<1",
-        "engulf-clab-ensure-vrnetlab>=0.2.2,<1",
-        "engulf-clab-vrnetlab-build>=0.4.2,<1",
-        "engulf-clab-wan>=0.3.2,<1"
+        "engulf-clab-dockerfile-build>=0.1.0,<1",
+        "engulf-clab-ensure-containerlab>=0.1.0,<1",
+        "engulf-clab-ensure-vrnetlab>=0.1.0,<1",
+        "engulf-clab-vrnetlab-build>=0.1.0,<1",
+        "engulf-clab-wan>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "ed1fd4107c36a1b32779a795d5d1867858b4fb73d0f240802f888ad4c5246f3e"
+      "sha256": "c4873c3663c6d7e32ad99684a479438fa62dcc033ae5c66fe2c5519d9096e21b"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-consumption/pyproject.toml",
       "name": "engulf-clab-consumption",
-      "version": "0.2.0",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.0,<1",
-        "engulf-clab-lab-registry-api>=1,<2",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-registry-api>=1.0.0,<2",
         "engulf-clab-lab-registry>=0.1.0,<1"
       ],
       "optional_dependencies": {},
@@ -240,37 +245,37 @@
           "engulf_clab.lab_registry": "preprocess=before; postprocess=none"
         }
       },
-      "sha256": "47492ded8e7e2553f216b11aa4e5a33f486ca17de21c7eef28fb24ee7a5970e0"
+      "sha256": "e063a32c5750067c7843e3a5e202510f2c1c45811b862ced063f46ea675fdfed"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-containers-api/pyproject.toml",
       "name": "engulf-clab-containers-api",
-      "version": "1.2.1",
+      "version": "1.0.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-docker-image-api>=1.4.0,<2"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-docker-image-api>=1.0.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "d3966920661ad962a86a4ea9de099947cab81979933e9e017a48a0eff0f66cea"
+      "sha256": "b52e41b3f6f4a05ce33d5156c45261bdbcea2a0c5e8db3ea7b1ed2ecb6e7ec8a"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-containers-core/pyproject.toml",
       "name": "engulf-clab-containers-core",
-      "version": "0.3.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-containers-api>=1.2.0,<2",
-        "engulf-clab-containers>=0.4.2,<1",
-        "engulf-docker-image-api>=1.4.0,<2"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-containers-api>=1.0.0,<2",
+        "engulf-clab-containers>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -288,7 +293,7 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "4e248811fce8d1cf14461656acb7d8464b37719633cd935e74e58bfbceedb963"
+      "sha256": "449718723c0f2bb93911c595ba5008425649fbac17c1c5fe3ce7bb7b08eea39a"
     },
     {
       "repository": "engulf-clab",
@@ -297,16 +302,16 @@
       "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-containers-api>=1.2.0,<2",
-        "engulf-clab-containers>=0.4.0,<1",
-        "engulf-clab-pki>=0.3.1,<1",
-        "engulf-clab-pki-linux-debian>=0.1.2,<1",
-        "engulf-clab-pki-linux-fedora>=0.1.2,<1",
-        "engulf-docker-image-api>=1.4.0,<2"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-containers-api>=1.0.0,<2",
+        "engulf-clab-containers>=0.1.0,<1",
+        "engulf-clab-pki>=0.1.0,<1",
+        "engulf-clab-pki-linux-debian>=0.1.0,<1",
+        "engulf-clab-pki-linux-fedora>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -324,24 +329,24 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "fb89d9a6400364106bee24bfc00f9f8ac6905f3ccdb6d59d466febaf7c27bf51"
+      "sha256": "6cdcfe28c9977c5781386396b1a139cffd046a2a46c3300fec9c81bc210f8d04"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-containers/pyproject.toml",
       "name": "engulf-clab-containers",
-      "version": "0.4.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-containers-api>=1.2.0,<2",
-        "engulf-clab-image-build>=0.2.3,<1",
-        "engulf-docker-image-api>=1.4.0,<2",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-lab-writer>=0.2.2,<1",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-containers-api>=1.0.0,<2",
+        "engulf-clab-image-build>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-writer>=0.1.0,<1",
         "PyYAML>=6.0"
       ],
       "optional_dependencies": {},
@@ -359,19 +364,19 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "a4232882ce16d9d46aa0b84ef5e82ac0ddb7cb6d1c3f47d45c156c88329fd48d"
+      "sha256": "fdb8f2b6ae94394e273c5b6dadf23c54854b2d664e58dd8193f6ad13ee936525"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-develop-eclab-lab/pyproject.toml",
       "name": "engulf-clab-develop-eclab-lab",
-      "version": "0.2.1",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -385,22 +390,22 @@
           "engulf_clab.schema": "preprocess=after; postprocess=before"
         }
       },
-      "sha256": "5ce6d2d8748a45dc7930bfc82ed91da6fb3e598e90de7a515ebb96153db014a9"
+      "sha256": "a49a6d576f7c9b1a7d3f4ed40544506da5eea14d0219eab0698f4af0f9021849"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-dockerfile-build/pyproject.toml",
       "name": "engulf-clab-dockerfile-build",
-      "version": "0.3.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-image-build>=0.2.3,<1",
-        "engulf-docker-image-api>=1.4.0,<2",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-image-build>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2",
         "PyYAML>=6.0"
       ],
       "optional_dependencies": {},
@@ -417,33 +422,33 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "e89309c995feca984860d510d791e8f88e8af1e0cc2c6ef25f9372102bc02d98"
+      "sha256": "46b1780fce32d496cb8fb32d519df8ae78b8a9c06a6457df5898da9493e11c1d"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-ensure-checkout/pyproject.toml",
       "name": "engulf-clab-ensure-checkout",
-      "version": "0.2.0",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2"
+        "engulf-api>=1.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "0ba0077c3ebf336f8c75327d5ab651531615746bd56916f24638e6c22f793aac"
+      "sha256": "d00355bf9d00a62a9276a29856dc2acf3647c60a4cdc99fbf7c64b480365d727"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-ensure-containerlab/pyproject.toml",
       "name": "engulf-clab-ensure-containerlab",
-      "version": "0.3.1",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-ensure-checkout>=0.2.0,<1"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-ensure-checkout>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -457,21 +462,21 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "4698aefae9a1ae4ead598054529d618ab0e9c2946ebb7f0cf329ae084d17bc3a"
+      "sha256": "5d68f420a62e015907b9176db3bb15f3ae787fce77cf42aaa3aa5f777babf1e5"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-ensure-vrnetlab/pyproject.toml",
       "name": "engulf-clab-ensure-vrnetlab",
-      "version": "0.2.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-ensure-checkout>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-ensure-checkout>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
         "PyYAML>=6.0"
       ],
       "optional_dependencies": {},
@@ -487,7 +492,7 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "84d550605c68d4cb0618b639fac7187c9c948af67720467453bdab95de2a065b"
+      "sha256": "b839daa1cac5ef636e35084670694e816a9e49249807fe8afff7fa74f42201d9"
     },
     {
       "repository": "engulf-clab",
@@ -504,16 +509,16 @@
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-freeze/pyproject.toml",
       "name": "engulf-clab-freeze",
-      "version": "0.4.1",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.0,<1",
-        "engulf-clab-vrnetlab-build>=0.4.0,<1",
-        "engulf-clab-freeze-api>=1,<2",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-vrnetlab-build>=0.1.0,<1",
+        "engulf-clab-freeze-api>=1.0,<2",
         "PyYAML>=6.0"
       ],
       "optional_dependencies": {},
@@ -528,23 +533,23 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "87c37f2c35ea733fa4dcd35e39ea965b580a644eb3ec6503d2ac9344e2ef0748"
+      "sha256": "aee1d698c4295b79d89352f16289b33c61a5eb0109c0202e18a1ad4d9ae2e273"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-image-archive/pyproject.toml",
       "name": "engulf-clab-image-archive",
-      "version": "0.3.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-image-build>=0.2.3,<1",
-        "engulf-docker-image-api>=1.4.0,<2",
-        "engulf-docker-image-core>=1.3.0,<2"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-image-build>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2",
+        "engulf-docker-image-core>=1.0.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -563,23 +568,23 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "4c3f8f0730453c538a97e3f72f050cc4f9de5956b075cfff3c881629657583d8"
+      "sha256": "2c703169cc3a60668ca39dd7d847a77a3e5f18e341ee1324d6dcd5a17d566c1e"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-image-build/pyproject.toml",
       "name": "engulf-clab-image-build",
-      "version": "0.2.3",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-docker-image-api>=1.4.0,<2",
-        "engulf-docker-image-core>=1.4.0,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-lab-writer>=0.2.2,<1"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-docker-image-api>=1.0.0,<2",
+        "engulf-docker-image-core>=1.0.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-writer>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -595,19 +600,19 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "1f7997404a9d60feed6a6556e1c892c10dbfb675fc952c2752b246a609607f1f"
+      "sha256": "9c2c527a06acfd46664705dbcdacfc55ff2966d74718824d0074a313c8238c77"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-lab-parser/pyproject.toml",
       "name": "engulf-clab-lab-parser",
-      "version": "0.2.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
         "PyYAML>=6.0"
       ],
       "optional_dependencies": {},
@@ -622,34 +627,34 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "49555fa97e50cdca08933f0395f3b20332878f5926849f0b62b483958894d987"
+      "sha256": "7f934f530bebb78dfec2d1d8d8e0f57cb7b911cd59c6dcb31bf546afdec37d78"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-lab-registry-api/pyproject.toml",
       "name": "engulf-clab-lab-registry-api",
-      "version": "1.0.1",
+      "version": "1.0.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2"
+        "engulf-api>=1.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "175e4e75ae80c3e2aeb5cf6ad911631f6f71f115d3e9a3b46eb8cfaed10fd5b1"
+      "sha256": "db3c3c39a0c404a9c91e4afca2a5c59d268381aac1fce83936fda49c9c71ab52"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-lab-registry/pyproject.toml",
       "name": "engulf-clab-lab-registry",
-      "version": "0.1.1",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.0,<1",
-        "engulf-clab-lab-registry-api>=1,<2"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-registry-api>=1.0.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -663,20 +668,20 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "133f11704bbdd6567a1abda54a270a34db22449e5f7d7a27b867a4765e0406c1"
+      "sha256": "699aab1c4620d020517ceb460dcfaa7b6c84b8d0be39396dd7c8a263716ac45f"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-lab-writer/pyproject.toml",
       "name": "engulf-clab-lab-writer",
-      "version": "0.2.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
         "PyYAML>=6.0"
       ],
       "optional_dependencies": {},
@@ -692,21 +697,21 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "bc3782bd6e2188152294bd9d5f52595c3e015e8d87e2bd824ccb76f055b12899"
+      "sha256": "0c34e1d431634a5669e2222fc1b09ef1fcd0650557ededb9754e8e3b578c7d03"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-license-pool/pyproject.toml",
       "name": "engulf-clab-license-pool",
-      "version": "0.3.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-lab-writer>=0.2.2,<1"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-writer>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -722,33 +727,33 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "0b4f0d677ad91c16bfb6125776b407849dd2d71bf2badf00fc3fb05e059fe3fd"
+      "sha256": "f3dcec7e4587d89b6b785e682e602c90ea25110d74ff5b03f650c2a9bc6f7509"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-pki-api/pyproject.toml",
       "name": "engulf-clab-pki-api",
-      "version": "2.0.1",
+      "version": "1.0.0",
       "requires_python": ">=3.14",
       "dependencies": [],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "3da04e8254c4f122f254ccd88d3e4e0c8a6abfe3c259769570bd69601a18946e"
+      "sha256": "e9a9b8e2f67e3adb39d6b53947d494d5ed0e0079c897ee7fefec8df398b9928e"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-pki-linux-core/pyproject.toml",
       "name": "engulf-clab-pki-linux-core",
-      "version": "0.1.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-docker-image-api>=1.4.0,<2",
-        "engulf-docker-image-core>=1.4.0,<2",
-        "engulf-clab-image-build>=0.2.1,<1"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2",
+        "engulf-docker-image-core>=1.0.0,<2",
+        "engulf-clab-image-build>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -765,23 +770,23 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "9933e81ae6b0db833e8be0f780bdf93ce9b8e8195ef1934fd983a8c6ff59906c"
+      "sha256": "46c6949d297e7157c34cfe33746e1b182177ed623850c883765442a42f9b07a0"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-pki-linux-debian/pyproject.toml",
       "name": "engulf-clab-pki-linux-debian",
-      "version": "0.1.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-docker-image-api>=1.4.0,<2",
-        "engulf-docker-image-core>=1.4.0,<2",
-        "engulf-clab-image-build>=0.2.1,<1",
-        "engulf-clab-pki-linux-core>=0.1.1,<1"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2",
+        "engulf-docker-image-core>=1.0.0,<2",
+        "engulf-clab-image-build>=0.1.0,<1",
+        "engulf-clab-pki-linux-core>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -798,23 +803,23 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "7412e27391455d8875dfb1f9a9bfa5d807392da06be81e61474f515e1ca31852"
+      "sha256": "585324c701794e3f2f8b5c85be721a6052cb46d2b839e0a8c8148cb372578147"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-pki-linux-fedora/pyproject.toml",
       "name": "engulf-clab-pki-linux-fedora",
-      "version": "0.1.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-docker-image-api>=1.4.0,<2",
-        "engulf-docker-image-core>=1.4.0,<2",
-        "engulf-clab-image-build>=0.2.1,<1",
-        "engulf-clab-pki-linux-core>=0.1.1,<1"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2",
+        "engulf-docker-image-core>=1.0.0,<2",
+        "engulf-clab-image-build>=0.1.0,<1",
+        "engulf-clab-pki-linux-core>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -831,24 +836,24 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "cea4cc84001fd8c22dc41f44d7bec65477890ddddd892f46838c12b33b7e2a74"
+      "sha256": "0aa5f73a5d3a6123afcf95e203665662c9c2a8c7aa5198b1dc72a870506d7445"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-pki/pyproject.toml",
       "name": "engulf-clab-pki",
-      "version": "0.3.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-pki-api>=2,<3",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-lab-writer>=0.2.2,<1",
-        "engulf-clab-freeze-api>=1,<2",
-        "engulf-clab-freeze>=0.4,<1",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-pki-api>=1.0,<3",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-writer>=0.1.0,<1",
+        "engulf-clab-freeze-api>=1.0,<2",
+        "engulf-clab-freeze>=0.1.0,<1",
         "cryptography>=45",
         "PyYAML>=6.0"
       ],
@@ -870,32 +875,62 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "9d0491609b18eaeeeae2816fe36eadd28d42950ded8c71b145f15d206f9e2fd4"
+      "sha256": "8f90efe23d411f01c75139a99fb031acee3631f9053e407e6e07e6a670318c16"
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-reclaim/pyproject.toml",
+      "name": "engulf-clab-reclaim",
+      "version": "0.1.0",
+      "requires_python": ">=3.14",
+      "dependencies": [
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-registry-api>=1.0.0,<2",
+        "engulf-clab-lab-registry>=0.1.0,<1"
+      ],
+      "optional_dependencies": {},
+      "entry_points": {
+        "engulf.plugins.v1.goal.v1.org_engulf_executable_wrapper": {
+          "engulf_clab.reclaim": "engulf_clab_reclaim:plugin"
+        },
+        "engulf.plugins.v1.application.engulf_clab": {
+          "engulf_clab.reclaim": "engulf_clab_reclaim:plugin"
+        },
+        "engulf.plugins.v1.dependency.engulf_clab_reclaim": {
+          "engulf_clab.lab_registry": "preprocess=before; postprocess=none",
+          "engulf_clab.schema": "preprocess=after; postprocess=none"
+        }
+      },
+      "sha256": "93bd4d3d61aa1c7f867e0f3501f3c3d0e9b1bfb16ed212852e7c859402f9f28f"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-schema-api/pyproject.toml",
       "name": "engulf-clab-schema-api",
-      "version": "2.0.0",
+      "version": "1.0.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "09bd5d37aa6ad8ede386c27f5fa3b4555f25202490057bb86ea0ba23a3d38792"
+      "sha256": "8ac2b5a05804ef522c68a709f96cf5d222e2ee298fc1cb0ea7169f471dceeac5"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-schema/pyproject.toml",
       "name": "engulf-clab-schema",
-      "version": "0.2.0",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
         "PyYAML>=6.0,<7"
       ],
       "optional_dependencies": {},
@@ -907,37 +942,7 @@
           "engulf_clab.schema": "engulf_clab_schema:plugin"
         }
       },
-      "sha256": "e781d85d57d2b7f980b989b9f07133f0563ee2a7d979cec8467d0cd7b938ceab"
-    },
-    {
-      "repository": "engulf-clab",
-      "path": "plugins/engulf-clab-sleep/pyproject.toml",
-      "name": "engulf-clab-sleep",
-      "version": "0.1.1",
-      "requires_python": ">=3.14",
-      "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.0,<1",
-        "engulf-clab-lab-registry-api>=1,<2",
-        "engulf-clab-lab-registry>=0.1.0,<1"
-      ],
-      "optional_dependencies": {},
-      "entry_points": {
-        "engulf.plugins.v1.goal.v1.org_engulf_executable_wrapper": {
-          "engulf_clab.sleep": "engulf_clab_sleep:plugin"
-        },
-        "engulf.plugins.v1.application.engulf_clab": {
-          "engulf_clab.sleep": "engulf_clab_sleep:plugin"
-        },
-        "engulf.plugins.v1.dependency.engulf_clab_sleep": {
-          "engulf_clab.lab_registry": "preprocess=before; postprocess=none",
-          "engulf_clab.schema": "preprocess=after; postprocess=none"
-        }
-      },
-      "sha256": "33341bf64fd1b0cf354249a6e758922a3edc79cbd13d97ff655735ae25c23c62"
+      "sha256": "98becf4b8bae4a046a71771e5d6fc0bd108cb26e9171a7f333ee65ba57d36b28"
     },
     {
       "repository": "engulf-clab",
@@ -946,12 +951,12 @@
       "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-lab-writer>=0.2.2,<1"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-writer>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -967,23 +972,23 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "8d8f575f512178e2cc64b3075b61e7f43cc5dc4361b7abaad74834b73eeeff64"
+      "sha256": "177c7231d69127b9db003b7649afb2fb1a41ecb1d0e82fa51d3ba499513e1e6d"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-vrnetlab-build/pyproject.toml",
       "name": "engulf-clab-vrnetlab-build",
-      "version": "0.4.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-ensure-vrnetlab>=0.2.2,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-image-build>=0.2.3,<1",
-        "engulf-docker-image-api>=1.4.0,<2",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-ensure-vrnetlab>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-image-build>=0.1.0,<1",
+        "engulf-docker-image-api>=1.0.0,<2",
         "PyYAML>=6.0"
       ],
       "optional_dependencies": {},
@@ -1004,23 +1009,23 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "4cdac2f678e93202096b7652cddd8c0f257baab92eec87873ac556ac075382dc"
+      "sha256": "6fb04de3e0b75d2ec5cd687bb3d8395ac316145d2b3bb13dd5064e64e1b3a37d"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-vrnetlab-fortigate-pki-injector/pyproject.toml",
       "name": "engulf-clab-vrnetlab-fortigate-pki-injector",
-      "version": "0.2.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-pki-api>=2,<3",
-        "engulf-clab-pki>=0.3.2,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-lab-writer>=0.2.2,<1"
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-pki-api>=1.0,<3",
+        "engulf-clab-pki>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-writer>=0.1.0,<1"
       ],
       "optional_dependencies": {},
       "entry_points": {
@@ -1037,21 +1042,21 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "2152155a6b4b5b8383b982ef608b3fb41adb40f86541dcd37168d2e9edb75e2c"
+      "sha256": "cbf87045af90062f1a18675c6487905d39f127c8a7892278aedc6e236b955961"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-clab-wan/pyproject.toml",
       "name": "engulf-clab-wan",
-      "version": "0.3.2",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-executable-wrapper-api>=1.2,<2",
-        "engulf-clab-schema-api>=2.0.0,<3",
-        "engulf-clab-schema>=0.2.0,<1",
-        "engulf-clab-lab-parser>=0.2.2,<1",
-        "engulf-clab-lab-writer>=0.2.2,<1",
+        "engulf-api>=1.0,<2",
+        "engulf-executable-wrapper-api>=1.0,<2",
+        "engulf-clab-schema-api>=1.0.0,<3",
+        "engulf-clab-schema>=0.1.0,<1",
+        "engulf-clab-lab-parser>=0.1.0,<1",
+        "engulf-clab-lab-writer>=0.1.0,<1",
         "PyYAML>=6.0"
       ],
       "optional_dependencies": {},
@@ -1068,45 +1073,45 @@
           "engulf_clab.schema": "preprocess=after; postprocess=none"
         }
       },
-      "sha256": "cbc3d55b89eff1649dd44ed031efff6ba9a0034e45f17a7398cd898f05552514"
+      "sha256": "9aca3bb9571ba370d0ad5c754cb3b243467e156ff0133cbc5e452eb467ff5be1"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-docker-image-api/pyproject.toml",
       "name": "engulf-docker-image-api",
-      "version": "1.4.1",
+      "version": "1.0.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2"
+        "engulf-api>=1.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "f66515ef4c1f9c3e3231f4f25e973cd2aa5982dfc7538540e105e8ba52c88029"
+      "sha256": "d27a6990c63f70757bd5e1c4c3490cee545b8979c09421cd052a15e8c66a224f"
     },
     {
       "repository": "engulf-clab",
       "path": "plugins/engulf-docker-image-core/pyproject.toml",
       "name": "engulf-docker-image-core",
-      "version": "1.4.0",
+      "version": "1.0.0",
       "requires_python": ">=3.14",
       "dependencies": [
-        "engulf-api>=1.2,<2",
-        "engulf-docker-image-api>=1.4.0,<2"
+        "engulf-api>=1.0,<2",
+        "engulf-docker-image-api>=1.0.0,<2"
       ],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "08a77fd9e6fbb48544649af08587ccdcefd4b2653ed06f47c72cf8e292715121"
+      "sha256": "fbb5309d5c706384e7cef7f5b44b8810df6e5b4abc6a8057c485d1d33bf6ff9b"
     },
     {
       "repository": "engulf-clab",
       "path": "skills/engulf-clab-develop-eclab-lab-static/pyproject.toml",
       "name": "engulf-clab-develop-eclab-lab-static",
-      "version": "0.1.3",
+      "version": "0.1.0",
       "requires_python": ">=3.14",
       "dependencies": [],
       "optional_dependencies": {},
       "entry_points": {},
-      "sha256": "1c2b8f6869ff50720c042c326c7ce4a362a7421b5a4629f77859131f3df4ae4a"
+      "sha256": "e196299bc1b10520d6a72bade16f7bc35a14b29b151030c50fa5ba49ccd4ec66"
     }
   ]
 }

@@ -24,12 +24,12 @@ published SDK commitment. Local calls pass codec gates before child access ships
 
 ```text
 helper.open:
-    if child transport is not configured: return None
+    if no broker, no executable opt-in, or empty effective grants: return None
     strategy = select_transport_strategy()     # fixed local selection, lazy imports
     require strategy.support.implemented      # Windows fails before allocation
     require compatible wrapper execution strategy
+    create child scope through goal-only OpenChild after policy validation
     create endpoint pair through strategy and bind opaque launch/wait resources
-    create child scope through goal-only OpenChild request
     return session; exhaust acquired resources on any open failure
 
 wrapper strategy spawns child -> helper.spawned(pid) releases child-side host copy
@@ -45,8 +45,14 @@ Unix implementation. It raises `UnsupportedTransportError` when IPC is requested
 local clients and service setup do not select or open a transport strategy.
 
 No child services are granted for the initial registry/image migrations. Those are
-local plugin use cases. A broker being selected does not itself grant Containerlab
-access to every provider.
+local plugin use cases and create no child scope or endpoint, even with a broker
+selected. The broker is a transport-configuration plugin, not a privilege-separation
+broker. It cannot expand application grants or opt an executable into IPC.
+
+Before B6, record an application-owned child consumer and its minimum grants at
+T-CONSUMER. Until one exists, local B delivery may complete while child transport
+remains a separately gated milestone. Keep the agreed strategy/Windows-stub design;
+do not claim that implementing a no-service handshake benefits the local consumers.
 
 ## Review boundary
 

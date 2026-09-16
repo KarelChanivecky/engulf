@@ -24,6 +24,10 @@ runtime invocation_api.operations:
     require_current_thread(runtime_recorded_callback_owner_thread)
     return StubClient(activation, captured_generation, owner_thread)
 
+runtime goal_api.report_managed_failure(error, *, stage):
+    require_active_goal_callback_and_owner_thread()
+    raise OperationUnavailableError(...)       # no accumulator in A
+
 StubClient.support / StubClient.request(...):
     activation.require_current(captured_generation)
     require_current_thread(owner_thread)
@@ -48,6 +52,12 @@ runtime behavior. Reject supplied support before selecting an OS strategy or
 accessing an attachment. A's unavailable generic implementation and B's unavailable
 Windows strategy are different stop points: B supports local managed calls on
 Windows while its child IPC operations still raise.
+
+A goal intending to work on A must probe `operation_support.implemented` before
+optional registration. A services-required goal refuses startup clearly; an uncaught
+setup rejection also prevents help/completion. A does not promise graceful operation
+for a B-only application. Hosting applications perform their bootstrap checks before
+constructing a goal with new constructor keywords.
 
 ## Review
 

@@ -67,6 +67,16 @@ An error can include a request ID only if a valid ID was parsed reliably. Do not
 invent ID 0 for malformed input. Detailed tracebacks/payloads remain host diagnostics;
 wire messages have bounded safe text and only metadata visible to that caller.
 
+Authorization precedes host directory lookup. For a syntactically valid CALL outside
+the connection's advertised target/method set, always return `kind: "request"`,
+`code: "not_granted"`, `message: "Service is not available to this connection."`.
+Use identical serialization for the same request ID, whether the hidden target
+exists, is missing, has an inaccessible default or would be ambiguous. Omitted
+provider selection operates only on the advertised subset; it never examines hidden
+defaults. Detailed readiness/unsupported/domain information is available only after
+the request has passed this advertised-grant check. T-AUTH tests byte-identical
+denied-existing, unknown and filtered-default cases and no provider activation.
+
 Channel disappearance, absent endpoint and uncertain completion are typed **client**
 errors, not synthetic replies received from a server. A validated correlated
 `deadline_exceeded` before dispatch is known not started; disappearance/expiry after

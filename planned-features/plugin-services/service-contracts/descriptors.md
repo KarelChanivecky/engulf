@@ -4,6 +4,16 @@ Back to [service contracts](README.md).
 
 ## Immutable description model
 
+Public service types are exported from `engulf_services_api`. Records are frozen,
+keyword-only and defensively copied. Capability and codec IDs use
+`engulf_api.validate_global_identifier`. Capability identity is the pair
+`(capability_id: str, api_major: int)`; majors and codec versions are exact positive
+integers, excluding booleans. Method IDs are capability-local lowercase identifiers
+matching `[a-z][a-z0-9_]*`; thus `read_page` is valid. This deliberately replaces the
+seed's qualified method names: the enclosing capability already supplies the
+namespace. Domain error codes use the same local grammar. No identifier is an import
+path. These rules are B contracts and must be in the Python/Go vectors.
+
 | Record | Proposed information |
 | --- | --- |
 | `CapabilityDescriptor` | Qualified capability ID, independent positive major, canonical required method set and recognized optional methods |
@@ -15,6 +25,24 @@ Back to [service contracts](README.md).
 | `ServiceRequest` | Capability/method identity, decoded immutable domain request, `ServiceCallContext` |
 | `ServiceReply` | Explicit success value or declared domain error value; never absent contribution |
 | `ServiceScopeClose` | Scope ID and reason, host cleanup budget, frozen dependency information sufficient for authorized cleanup calls |
+
+Constructor fields for the author-facing registration records are:
+
+```text
+CodecIdentity(*, codec_id: str, version: int)
+MethodDescriptor(*, method_id: str, request_codec: CodecIdentity,
+                 result_codec: CodecIdentity, domain_errors: frozenset[str])
+CapabilityDescriptor(*, capability_id: str, api_major: int,
+                     required_methods: tuple[MethodDescriptor, ...],
+                     optional_methods: tuple[MethodDescriptor, ...] = ())
+CapabilityImplementation(*, capability_id: str, api_major: int,
+                         optional_method_ids: frozenset[str] = frozenset())
+ServiceRegistration(*, capabilities: tuple[CapabilityImplementation, ...])
+```
+
+Reject duplicate or overlapping method IDs and undeclared optional IDs. Domain
+preference metadata is supplied through its separately accepted capability schema;
+it is not an arbitrary metadata dictionary on these common records.
 
 Canonical descriptors come from the application's accepted capability APIs. Match
 IDs **and** method/codec definitions; matching names alone is insufficient. Required
@@ -31,16 +59,16 @@ contains no API, state handle, logger, lease, socket or callback.
 
 ## Participant interface and adapters
 
-The service participant interface is an opt-in mixin/protocol alongside the
+The service participant interface is an opt-in nominal ABC mixin alongside the
 goal-specific plugin base, not a new unrelated goal catalog. Nonparticipants have
 an explicit no-registration result in setup and are never selected for business
 service calls. Calls go to the active goal adapter's ID.
 
 ```text
 ServiceParticipant:
-    register_services(event, registration_api) -> ServiceRegistration | None
+    register_services(event, registration_api) -> ServiceRegistration | None  # default None
     call_service(request: ServiceRequest, invocation_api) -> ServiceReply
-    close_service_scope(event: ServiceScopeClose, invocation_api) -> None
+    close_service_scope(event: ServiceScopeClose, invocation_api) -> None     # default no-op
 
 module_level_call_adapter(plugin, local_event, owner_api):
     # local_event contains a trusted application-selected MethodBinding;
@@ -59,6 +87,32 @@ adapter defect, not a new caller mistake. The adapter owns validation, not direc
 selection or business logic. The trusted codec binding comes from the separate
 application codec catalog; a registration or wire name never supplies executable
 code. Provider method logic receives only the decoded request and its own API.
+
+`call_service` is abstract. Setup's REGISTER adapter uses
+`isinstance(plugin, ServiceParticipant)` and returns `None` for an ordinary plugin,
+so a broadcast is safe without changing `GoalSetupAPI.dispatch`. CONFIGURE uses a
+separate nominal `ServiceTransportConfigurator` mixin with
+`configure_service_transport(event, registration_api)`; nonconfigurators return
+`None`. Business dispatch targets only registered participants.
+
+All four module-level phase objects live in `engulf_services_api`, with keyword
+construction, the matching module-level forwarding adapter and
+`isolate_failures=False`:
+
+| Export | `phase_id` | Order | API / contribution |
+| --- | --- | --- | --- |
+| `SERVICE_CONFIGURE_PHASE` | `org.engulf.services.configure` | PREPROCESS | RegistrationAPI / ServiceTransportConfiguration |
+| `SERVICE_REGISTER_PHASE` | `org.engulf.services.register` | PREPROCESS | RegistrationAPI / ServiceRegistration |
+| `SERVICE_CALL_PHASE` | `org.engulf.services.call` | PREPROCESS | InvocationAPI / EncodedServiceReply |
+| `SERVICE_CLOSE_PHASE` | `org.engulf.services.close` | POSTPROCESS | InvocationAPI / ServiceCloseAcknowledgment |
+
+`SERVICE_OPERATION_ID` is `org.engulf.services`. Operation registration contains
+only CALL and CLOSE. Close dispatch addresses one provider at a time in the scope's
+computed order. The result acknowledgment is an explicit empty frozen record.
+Transport configuration contains immutable backend/binding IDs, requested limits
+and requested child grants; the runtime validates it against application policy.
+Its complete constructor and native-independent limit types are deferred to
+S-AUTHOR/T-CONSUMER before B6, not frozen in A or needed for local-only B3.
 
 ## Error semantics
 

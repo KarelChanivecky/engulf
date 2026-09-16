@@ -13,9 +13,11 @@ own `Popen`, call plugins directly, or replace preparation/postprocessing.
 | [Process lifecycle](process/README.md) | Open/prepare/spawn/pump/stop/close and failure paths |
 | [Environment and completion](environment/README.md) | Fresh child environment, endpoint inheritance and completion metadata |
 
-Implement this generic seam using a fake helper before installing services in eclab.
-The local services helper registers its operation during setup even without a child
-broker, so installing it into A's deliberately rejecting wrapper cannot work.
+Implement this generic seam using a fake helper before enabling child transport.
+Local eclab services can register from an app-owned goal's setup after B1/B3,
+independently of this process seam. Installing an execution-support helper into A's
+deliberately rejecting wrapper still cannot work. The later helper and local goal
+subclass must not both register the same operation.
 
 ## Integration sketch
 

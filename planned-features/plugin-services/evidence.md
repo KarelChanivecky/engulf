@@ -6,6 +6,26 @@ paths and symbols below are the evidence anchors, not a claim that both reposito
 were clean or that every historical line number still matches. A file-hash snapshot
 is recorded with the [design validation](delivery/design-validation.md).
 
+## Reassessment snapshot
+
+The critique reassessment used Engulf `4c7e95e` and sibling `f8c9063`. The refreshed
+[package inventory](delivery/package-inventory.md) and
+[source hashes](delivery/review-source-snapshot.json) supersede earlier current-state
+claims; the original JSON snapshot remains historical. Both repositories reset
+distribution versions, and sleep became reclaim (`e543a30`). These observations
+expire when the trees change; A3/B8 must refresh them again.
+
+Additional source checks for S1–S28:
+
+| Source | Rechecked fact |
+| --- | --- |
+| [GoalResult](../../engulf-api/src/engulf_api/goals.py), constructor and framework_failed | Text-only error; constructor already preserves value with framework-failed status. No required classmethod extension. |
+| [Hook/phase dispatcher](../../engulf/src/engulf/_dispatch.py), run_before/run_after/_dispatch | Hooks own their traversal and activation separately from phase dispatch today; both need the shared B callback boundary. |
+| [Goal privilege](../../engulf/src/engulf/privilege.py), validate_goal_privilege | Exact class and owning distribution consent; not an audit of helpers or a plugin isolation boundary. |
+| [Packaging diagnostic](../../engulf/src/engulf/packaging_check.py), _read_project | Checks dependency names; resolver/version validation is a separate install gate. |
+| [Image provisioner](../../../engulf-clab/plugins/engulf-docker-image-core/src/engulf_docker_image_core/provision.py), provision_image_graph; [worker submission](../../../engulf-clab/plugins/engulf-docker-image-core/src/engulf_docker_image_core/build.py), _build_batch | Provider lookup runs before building on the calling thread; workers receive ResolvedImage values. S25 does not demonstrate a worker API leak. |
+| [Reclaim command](../../../engulf-clab/plugins/engulf-clab-reclaim/src/engulf_clab_reclaim/command.py), plan/execute; [Docker adapter](../../../engulf-clab/plugins/engulf-clab-reclaim/src/engulf_clab_reclaim/docker.py) | Registry upsert precedes removal but is currently deferred by the session; images omit force, containers use force/volumes. No Docker mutation was performed in this review. |
+
 ## Core contracts and dispatch
 
 | Evidence | Observed behavior | Design implication |
@@ -13,7 +33,7 @@ is recorded with the [design validation](delivery/design-validation.md).
 | [Goal contracts](../../engulf-api/src/engulf_api/goals.py), `GoalPhase`, `GoalResult` | Frozen phases hold a local adapter; generic API annotations are erased. `GoalResult` can preserve a value with framework-failed status through its constructor. | Canonical phase allowlist; no imagined runtime phase kind. Preserve actual child outcome when applying a managed failure. |
 | [Public API](../../engulf-api/src/engulf_api/plugin_api.py), `GoalSetupAPI`, `InvocationAPI` | Setup and invocation capabilities are distinct ABC contracts. | New methods on existing ABCs need concrete unsupported defaults. |
 | [Dispatcher](../../engulf/src/engulf/_dispatch.py), `_PhaseDispatcher._dispatch`, `_HookRunner` | Each owner is activated before its endpoint call and deactivated afterward. `None` is a valid absent generic contribution. Exception wrapping currently happens at each dispatch/hook boundary. | Reuse owner dispatch; validate required service replies in the owner adapter; preserve managed origin through outer boundaries. |
-| [Capabilities](../../engulf/src/engulf/_capabilities.py), `_ActivationState`, `_LockCoordinator` | Generation/current checks protect callback-bound capabilities; coordinators track each participant's transactions/leases. Generation checks do not establish the current nested execution frame. | Add a per-invocation execution stack for the new operation path; inspect ancestor locks without transferring them. |
+| [Capabilities](../../engulf/src/engulf/_capabilities.py), `_ActivationState`, `_LockCoordinator` | Generation/current checks protect callback-bound capabilities; coordinators track each participant's transactions/leases. Generation checks do not establish the current nested execution frame. | Push B participant frames for all invocation callbacks, including ordinary hooks and goal entry; inspect ancestor locks without transferring them. |
 | [Application](../../engulf/src/engulf/application.py), `_invoke`, `_setup_goal` | Handlers do not exist yet. State destruction follows outer hooks; API closure follows destruction. A cleanup exception can bypass later unguarded cleanup calls. | Install operation lifetime before hooks, finalize before state destruction, and exhaust every finalizer while preserving the primary failure. |
 | [State](../../engulf/src/engulf/state.py), `RuntimeStateStore`, `_UserStoreBackend`, `finalize_destructions` | Transactions serialize writes without rollback; ordinary reads can wait with `timeout=None`; transaction-held user-store access avoids reacquiring its store lock. Destruction collects ordinary exceptions, not all termination exceptions. | Registry service reads and writes use explicit finite user-state transactions. Do not claim all filesystem waits become interruptible. Broaden managed finalization tests to termination. |
 | [Core guide](../../engulf/README.md), [API guide](../../engulf-api/README.md), [workspace instructions](../../AGENTS.md) | Core is portable; all plugin calls use the internal execution endpoint. Plugin catalogs and application selection are independent from trust. | No wrapper/service imports into core, no directory of live implementations, no claim of isolation. |
@@ -27,8 +47,8 @@ is recorded with the [design validation](delivery/design-validation.md).
 
 ## Registry and consumers
 
-The originally suggested nested consumption/sleep paths are now separate packages:
-`plugins/engulf-clab-consumption` and `plugins/engulf-clab-sleep`.
+The originally suggested nested consumption/reclaim paths are now separate packages:
+`plugins/engulf-clab-consumption` and `plugins/engulf-clab-reclaim`.
 
 | Evidence | Observed behavior | Design implication |
 | --- | --- | --- |
@@ -36,7 +56,7 @@ The originally suggested nested consumption/sleep paths are now separate package
 | [Registry storage](../../../engulf-clab/plugins/engulf-clab-lab-registry/src/engulf_clab_lab_registry/storage.py), `SessionLabRegistry`, `StateLabRegistry` | `labs.json` version 1; keys, sorting and merge semantics; transaction writes; no inventory page or message limit. | Preserve persistence format and namespace; add bounded snapshot paging in the domain API rather than assume a full inventory fits one frame. |
 | [Registry API](../../../engulf-clab/plugins/engulf-clab-lab-registry-api/src/engulf_clab_lab_registry_api/contract.py) | `LabRecord` owns typed identity/observation semantics and context access. | Capability codecs and typed clients belong in this API package; consumers still cannot read provider files. |
 | [Consumption plugin](../../../engulf-clab/plugins/engulf-clab-consumption/src/engulf_clab_consumption/plugin.py), [command](../../../engulf-clab/plugins/engulf-clab-consumption/src/engulf_clab_consumption/command.py) | Runs/preempts in `before_goal`; repeatedly reads the session during two-second polling and calls `upsert`. | Managed operations must work before `goal.achieve`; every reporting iteration needs a newly persisted snapshot. |
-| [Sleep plugin](../../../engulf-clab/plugins/engulf-clab-sleep/src/engulf_clab_sleep/plugin.py), [command](../../../engulf-clab/plugins/engulf-clab-sleep/src/engulf_clab_sleep/command.py) | Holds `eclab-sleep:docker`; `execute` calls session `upsert` before removing resources. That call does not yet establish persistence. | Cross-owner state work under the caller's external lease is required. Verify persisted state independently at the first deletion. |
+| [Reclaim plugin](../../../engulf-clab/plugins/engulf-clab-reclaim/src/engulf_clab_reclaim/plugin.py), [command](../../../engulf-clab/plugins/engulf-clab-reclaim/src/engulf_clab_reclaim/command.py) | Holds `eclab-reclaim:docker`; `execute` calls session `upsert` before removing resources. That call does not yet establish persistence. | Cross-owner state work under the caller's external lease is required. Verify persisted state independently at the first deletion. |
 | [Registry contribution guide](../../../engulf-clab/plugins/engulf-clab-lab-registry/CONTRIBUTING.md), [usage](../../../engulf-clab/plugins/engulf-clab-lab-registry/USAGE.md) | Expected tracking failures should not change successful deployment results; observations must be complete. | Expected storage errors become declared domain results; implementation defects still follow managed failure rules. Update documentation coherently at migration. |
 
 ## Images and application composition

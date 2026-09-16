@@ -15,13 +15,38 @@ These definitions are B work. A reserves only the generic operation entry point
 through which the facade will communicate. Finalize capability APIs against registry
 and image consumers before publishing their new versions.
 
+The author-facing module, signatures, identifier grammar and phase values are in
+[descriptors](descriptors.md) and [clients](clients/README.md). S-AUTHOR requires a
+complete typed provider/consumer/application fixture using those public imports,
+including an old nonparticipant plugin. Until that fixture passes, B's public
+constructors remain proposed; no prose example counts as implementation evidence.
+
+## Worked local call
+
+Use the registry as the first complete authoring fixture. The application creates
+accepted registry descriptors/codecs and calls `install_services` during its goal's
+setup (see [composition](../eclab/application/README.md)). REGISTER broadcasts to all
+selected plugins; ordinary plugins return no contribution, and the registry returns
+its immutable `ServiceRegistration`. Packaging order lets registry enter before
+consumption's `before_goal`.
+
+Consumption creates `LabRegistryClient(services(api).require(REGISTRY_CAPABILITY))`.
+Its `snapshot()` call encodes `begin_snapshot`, enters the one service operation,
+and dispatches the registry adapter with the registry's API. The registry takes its
+finite state transaction, returns a validated page, and deactivates. Consumption
+receives detached records and read tokens. Later pages use retained immutable data;
+they do not reread the whole file. After consumption finishes, core closes the
+invocation's touched registry scope. A declared unreadable inventory is recoverable;
+an unexpected provider error is attributed to the registry and latches exit 70.
+
 ## Interaction pseudocode
 
 ```text
 # Consumer imports its capability API and engulf-services-api, not the runtime.
 registry = LabRegistryClient(services(api).require(REGISTRY_CAPABILITY))
-inventory = registry.records()                  # complete immutable snapshot
-registry.commit_observations(observations)      # return only after all acknowledgments
+baseline = registry.snapshot()                 # complete pre-sample records/bases
+observations = sample_with_record_bases(baseline)
+registry.commit_observations(observations)      # conditional writes, all acknowledged
 
 # Facade talks to the one generic service operation.
 wire_request = capability_codec.encode_and_validate(request)

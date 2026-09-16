@@ -1,0 +1,202 @@
+{
+  "captured_utc": "2026-09-15T05:29:21.637504+00:00",
+  "purpose": "Source hashes for critique reassessment; original source-snapshot.json remains historical. Hashing is not proof of implementation behavior.",
+  "repository_heads": {
+    "engulf": "4c7e95e68d822c17151633e1bef9e0dd197e2b26",
+    "engulf-clab": "f8c906317fc74a6ecae8c40866fb6571062b6189"
+  },
+  "files": [
+    {
+      "repository": "engulf",
+      "path": "AGENTS.md",
+      "sha256": "9a9b1d032228840493d52e2d811dc9b2813d9264ef9541aa57c1874604f9440d",
+      "lines": 358
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf-api/README.md",
+      "sha256": "a86d6847e3b37b5d77fb009cec23ad7a59b19aa65f8b59f66de8d825db0b88eb",
+      "lines": 620
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf-api/src/engulf_api/goals.py",
+      "sha256": "6337a542566d1053e0ba8b60224c081c60de530b9bd4b26dba5aa9492f4d6274",
+      "lines": 250
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf-api/src/engulf_api/plugin_api.py",
+      "sha256": "50b71efa142798460ed276737efba40b5603cfa039bd39e33586a0a8fc3ca806",
+      "lines": 156
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf-executable-wrapper-api/README.md",
+      "sha256": "d46967a9986c2abb8b749c46d2842d9a0dbe18c9f7e85e9d73d9b55639f6ec28",
+      "lines": 531
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf-executable-wrapper/README.md",
+      "sha256": "3caa6da45d38db31eb8118ecd37744fd04b95e6d30ff87cfe689affc75299c40",
+      "lines": 258
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf-executable-wrapper/src/engulf_executable_wrapper/goal.py",
+      "sha256": "4e5511fe5671a322945dffc18105f63978ee34b891d99274601cc72ccd9463ca",
+      "lines": 1000
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf/README.md",
+      "sha256": "a5283c955193099f0fd08bb4b16d9b3f1da0d0d0a1472b286a3487740fc21790",
+      "lines": 895
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf/src/engulf/_capabilities.py",
+      "sha256": "d920bc0d264787056ab1a578ae03b5639e9a4b5f97b6d06f1fce32b960add6ca",
+      "lines": 504
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf/src/engulf/_dispatch.py",
+      "sha256": "7e644c74b5e6d58aad4f538ef57d761e775c554085a005027de5accb15e0d0db",
+      "lines": 309
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf/src/engulf/application.py",
+      "sha256": "5028c1ffc92511993a1e5e21b1336768386228f0f0ac17bca67cee9656e86d6b",
+      "lines": 910
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf/src/engulf/packaging_check.py",
+      "sha256": "38fbad8b29bffa9e083d42a4f56f26792f4afcd65dffc0fb75b575a58b345d47",
+      "lines": 187
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf/src/engulf/privilege.py",
+      "sha256": "5adf9bfcaff2cce8211826153d3445c0e1e47ff6b27c60aee3034f560f3b371a",
+      "lines": 116
+    },
+    {
+      "repository": "engulf",
+      "path": "engulf/src/engulf/state.py",
+      "sha256": "a5d7d9c357d42f4cd786de4a04d3070267cc0365378cffc1fa4a021517ba2633",
+      "lines": 863
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "engulf-clab/src/engulf_clab/app.py",
+      "sha256": "353b36252b39512c72b9fd693cfafe226becdb913475111afabdd8567eafe7d0",
+      "lines": 162
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-consumption/src/engulf_clab_consumption/command.py",
+      "sha256": "ef5669db0bc1432f8e4361756e3de15aa2169a13a241ec7c9a0a74274c48c3ba",
+      "lines": 345
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-consumption/src/engulf_clab_consumption/plugin.py",
+      "sha256": "b655ed8d653ba33e7bad4a3f0c64ee51302e2cf8c1d132b0858a713686754ea5",
+      "lines": 113
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-image-archive/src/engulf_clab_image_archive/plugin.py",
+      "sha256": "8443aa680720010badb4b5ae1f4cf631a5d06a7f12a0dde10e22f659afff4f07",
+      "lines": 220
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-image-build/src/engulf_clab_image_build/plugin.py",
+      "sha256": "9621d382cd2b219c3756700a6c48ed36b6f3a8773e1836fef82bbd08bbac3e95",
+      "lines": 351
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-lab-registry-api/src/engulf_clab_lab_registry_api/contract.py",
+      "sha256": "03f768aae1d08d36947cf51893465c3f57f3d27bbc947a59962b9f6a769101cc",
+      "lines": 71
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-lab-registry/CONTRIBUTING.md",
+      "sha256": "6cc629a1e34eeb3fff4ce6386f4eea2b19ef1450778657b1c0b0295aa33c69b5",
+      "lines": 32
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-lab-registry/USAGE.md",
+      "sha256": "f91c6886aec8143dda73e7250b6b942454d7c5b9011b367dd88719644be3fcfd",
+      "lines": 32
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-lab-registry/src/engulf_clab_lab_registry/plugin.py",
+      "sha256": "2ffbd7450b56b0394b08052de93cbdcd55747515540e792f42047871af2d14d4",
+      "lines": 141
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-lab-registry/src/engulf_clab_lab_registry/storage.py",
+      "sha256": "81b1cac56a7315d0ba02fc5d7885a6c19f5ef626414288909632b4465b14a354",
+      "lines": 166
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-reclaim/src/engulf_clab_reclaim/command.py",
+      "sha256": "94637f4157a87d0cc8991cbbf9e0426c448eabb2764fd2585f7ea186eb47d59a",
+      "lines": 344
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-reclaim/src/engulf_clab_reclaim/docker.py",
+      "sha256": "6fe08a02660f0dc817ed9d3e0baaa821587167d6ef2e7fe65692e08e01a611f6",
+      "lines": 208
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-reclaim/src/engulf_clab_reclaim/plugin.py",
+      "sha256": "ae9dac142251cd5b391e9032625ecbb34fac846aa331da04f67ef07b12ed2423",
+      "lines": 144
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-clab-vrnetlab-build/src/engulf_clab_vrnetlab_build/plugin.py",
+      "sha256": "b0024dbca706873f23ec69c71b6a2aab77a6951a1246a78e31fc8b5dc7593a61",
+      "lines": 385
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-docker-image-api/src/engulf_docker_image_api/contract.py",
+      "sha256": "fe3693414f896eea5456555566229f5703f25351c13af2780f877bd6fa62b1fa",
+      "lines": 395
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-docker-image-core/src/engulf_docker_image_core/build.py",
+      "sha256": "362bb0eb67e511acfe2676a9f62eeaa5948eedad302d87a21eb59af05cc9cc10",
+      "lines": 538
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-docker-image-core/src/engulf_docker_image_core/provision.py",
+      "sha256": "c795bd43df2c55b45c06755f262fea687729f28a670d0e62eada5e46689c112b",
+      "lines": 104
+    },
+    {
+      "repository": "engulf-clab",
+      "path": "plugins/engulf-docker-image-core/src/engulf_docker_image_core/resolver.py",
+      "sha256": "5e595a65465558436184e0eddc8d530bbbce00c8c398a7eddad8669422d787d9",
+      "lines": 310
+    }
+  ]
+}

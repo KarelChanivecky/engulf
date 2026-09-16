@@ -2,7 +2,7 @@
 
 Core supplies a synchronous invocation operation that can dispatch a goal's selected
 participants under their own capabilities. It is useful before `goal.achieve`, when
-consumption and sleep already execute. A helper callable installed only inside the
+consumption and reclaim already execute. A helper callable installed only inside the
 goal would miss those consumers. See [source evidence](../evidence.md#core-contracts-and-dispatch).
 
 | Subcomponent | Responsibility |
