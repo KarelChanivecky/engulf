@@ -4,7 +4,7 @@ Engulf is a goal-oriented framework for managed, plugin-based CLI applications.
 The core framework owns discovery, lifecycle, diagnostics, state, transactions, and
 resource leases. Application-specific behavior lives in a **goal**.
 
-This workspace contains five independently publishable Python 3.14 distributions:
+This workspace contains five independently publishable Python 3.12+ distributions:
 
 | Directory | Distribution | Responsibility |
 | --- | --- | --- |
@@ -53,7 +53,7 @@ Install the five published distributions from the indexes configured for pip:
 make install
 ```
 
-Set `INSTALL_PYTHON` when the target interpreter is not named `python3.14`, for
+Set `INSTALL_PYTHON` when the target interpreter is not named `python3.12`, for
 example `make install INSTALL_PYTHON=.venv/bin/python`. This is the supported
 consumer installation path. The editable commands below are only for development
 inside a source checkout.
@@ -88,7 +88,7 @@ in-process code with the application's full authority.
 
 ## Source Development
 
-Create a Python 3.14 environment. Use that environment's interpreter for the
+Create a Python 3.12 or newer environment. Use that environment's interpreter for the
 remaining commands: `.venv/bin/python` on POSIX or
 `.venv\Scripts\python.exe` on Windows.
 

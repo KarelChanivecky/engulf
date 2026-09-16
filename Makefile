@@ -11,7 +11,7 @@ DIR_engulf-plugin-list := plugins/engulf-plugin-list
 
 dir_of = $(or $(DIR_$1),$1)
 
-INSTALL_PYTHON ?= python3.14
+INSTALL_PYTHON ?= python3.12
 
 .PHONY: all environment clean-dist check-packaging build install
 
@@ -20,8 +20,8 @@ all: build
 
 environment:
 	@if [ ! -d .venv ]; then \
-		command -v python3.14 >/dev/null 2>&1 || { echo "error: Python 3.14 is required" >&2; exit 1; }; \
-		python3.14 -m venv --upgrade-deps .venv; \
+		command -v python3.12 >/dev/null 2>&1 || { echo "error: Python 3.12 is required" >&2; exit 1; }; \
+		python3.12 -m venv --upgrade-deps .venv; \
 	elif [ ! -x "$(PYTHON)" ]; then \
 		echo "error: .venv is not a usable virtual environment" >&2; \
 		exit 1; \

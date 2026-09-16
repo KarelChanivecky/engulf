@@ -334,7 +334,7 @@ def _isolation_available(
         return False, f"Bubblewrap isolation unavailable: {detail or result.returncode}"
     try:
         response = json.loads(result.stdout)
-    except UnicodeDecodeError, json.JSONDecodeError:
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return False, "Bubblewrap isolation probe returned malformed output"
     if response != {"version": 1, "probe": "ok"}:
         return False, "Bubblewrap isolation probe returned an invalid response"
@@ -591,7 +591,7 @@ def _bubblewrap_command(
     ]
     for source, destination in sandbox_mounts:
         command.extend(("--ro-bind", str(source), destination))
-    base_python = getattr(sys, "_base_executable", None) or "/usr/bin/python3.14"
+    base_python = getattr(sys, "_base_executable", None) or sys.executable
     command.extend((base_python, "-s", "-m", "engulf._diagnostic_worker"))
     return command
 

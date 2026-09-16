@@ -210,7 +210,7 @@ class EntryPointIndex:
                                 strict=True
                             )
                         )
-                    except OSError, RuntimeError, TypeError, ValueError:
+                    except (OSError, RuntimeError, TypeError, ValueError):
                         continue
                 resolved = frozenset(owned)
         except Exception:  # noqa: BLE001 - unreadable metadata denies ownership.
