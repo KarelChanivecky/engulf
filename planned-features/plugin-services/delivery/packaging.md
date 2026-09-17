@@ -98,7 +98,7 @@ symbols out of migrated operational paths. B-MIGRATE includes external old-plugi
 fixtures; an owned-source inventory cannot establish universal compatibility.
 
 Build the
-current five public distributions for A using `./build.sh`; update that build list
+current five public distributions for A using `make build`; update that build list
 to eight only when the three optional packages arrive in B. Build/test affected
 downstream distributions and examples according to their owning workflows. Do not
 hand-edit generated archives or imply that documentation validation built new wheels.

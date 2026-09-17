@@ -113,15 +113,14 @@ python -m mypy
 ```
 
 Build all five wheels and source distributions, then validate their package
-metadata with Twine. The script creates `.venv` and installs the development
-dependencies when the workspace environment does not exist:
+metadata with Twine. The `environment` target creates `.venv` and installs the
+development dependencies when the workspace environment does not exist:
 
 ```console
-./build.sh
+make build
 ```
 
-`build.sh` is a convenience wrapper around `make build`. Builds use a clean root
-`dist/` directory so old artifacts are not carried forward.
+Builds use a clean root `dist/` directory so old artifacts are not carried forward.
 
 See [`engulf/README.md`](engulf/README.md) for application and discovery behavior,
 and [`engulf-executable-wrapper-api/README.md`](engulf-executable-wrapper-api/README.md)

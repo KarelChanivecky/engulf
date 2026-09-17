@@ -351,7 +351,7 @@ PYTHONPATH=engulf-api/src:engulf/src:engulf-executable-wrapper-api/src:engulf-ex
 ```
 
 When package metadata changes, build all five wheels and source distributions and run
-Twine checks with `./build.sh`. Do not hand-edit generated archives.
+Twine checks with `make build`. Do not hand-edit generated archives.
 
 Use deterministic subprocess/multiprocessing coordination for lock and signal tests.
 Cover failure, ordering, repeated invocation, policy filtering, and non-import of

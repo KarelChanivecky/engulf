@@ -99,7 +99,7 @@ workflows and communication remain part of those contracts.
 - Cover callback-bound APIs and leases, wrapper signal/terminal regressions,
   portable imports, and the Windows stub.
 - Run the required workspace checks and new package suites; add the packages to
-  build, typing, and documentation checks, then run `./build.sh` with Twine
+  build, typing, and documentation checks, then run `make build` with Twine
   validation.
 - Start new distributions at `0.1.0`, include `py.typed`, and leave existing
   versions and `PLUGIN_API_MAJOR` unchanged.

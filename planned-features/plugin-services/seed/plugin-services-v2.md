@@ -674,7 +674,7 @@ PYTHONPATH=engulf-api/src:engulf/src:engulf-executable-wrapper-api/src:engulf-ex
 ```
 
 Extend lint/format targets for the two new top-level directories, run all new package
-and Go suites, and run `./build.sh` after package metadata changes. Do not hand-edit
+and Go suites, and run `make build` after package metadata changes. Do not hand-edit
 generated archives. Coordinate the setup insertion point and API changes with
 [goal-owned-cli-parser.md](../../goal-owned-cli-parser.md); services adds no CLI parser
 or endpoint-related user command. Neither plan should bypass the other's existing

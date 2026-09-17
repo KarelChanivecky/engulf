@@ -191,7 +191,7 @@ packages OS-independent. Do not bump existing versions during first-release work
 - Completion tests cover partial input, trailing empty words, wrapper filtering,
   native completion composition, and absence of execution/preparation side effects.
 - Add contract/runtime tests in the owning packages. Run the commands required by
-  [AGENTS.md](../AGENTS.md); if package metadata changes, also run `./build.sh` to
+  [AGENTS.md](../AGENTS.md); if package metadata changes, also run `make build` to
   build and validate all five distributions.
 
 ## Decisions to resolve during implementation
