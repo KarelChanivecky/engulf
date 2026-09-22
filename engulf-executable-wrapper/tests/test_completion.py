@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from engulf_executable_wrapper import ExecutableWrapperGoal, completion_cli
 from engulf_executable_wrapper.completion import (
+    _write_context_records,
     collect_candidates,
     normalize_for_binary,
     render_completion_script,
@@ -239,6 +240,33 @@ class CompletionTestCase(unittest.TestCase):
 
         self.assertEqual(normalized, ("",))
         self.assertEqual(cursor, 0)
+
+    def test_complete_context_record_shape_is_counted_and_terminated(self) -> None:
+        output = io.BytesIO()
+        stdout = type("Stdout", (), {"buffer": output})()
+        with patch("sys.stdout", stdout):
+            _write_context_records(
+                2,
+                ("real-command", ""),
+                (CompletionCandidate("--wrapper"),),
+                (CompletionCandidate("--binary"), CompletionCandidate("path/")),
+            )
+
+        self.assertEqual(
+            output.getvalue().split(b"\0")[:-1],
+            [
+                b"2",
+                b"2",
+                b"real-command",
+                b"",
+                b"1",
+                b"--wrapper",
+                b"2",
+                b"--binary",
+                b"path/",
+                b"ENGULF_CONTEXT_END",
+            ],
+        )
 
     def test_duplicate_option_registration_is_rejected(self) -> None:
         class DuplicatePlugin(ExecutableWrapperPlugin):
@@ -893,6 +921,38 @@ print -rl -- "${{captured[@]}}"
         )
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_uses_one_merged_wrapper_request(self) -> None:
+        completion = self.directory / "_wrapped-single-request"
+        script = render_completion_script(Shell.ZSH, str(self.wrapper), "real-command")
+        completion.write_text(script, encoding="utf-8")
+        function_name = self.function_name(script)
+        action_log = self.directory / "zsh-actions.log"
+        command = f"""
+typeset -A _comps
+compdef() {{ :; }}
+compadd() {{ :; }}
+source {shlex.quote(str(completion))}
+words=({shlex.quote(str(self.wrapper))} --)
+CURRENT=2
+{function_name}
+"""
+        environment = self.environment()
+        environment["ENGULF_TEST_ACTION_LOG"] = str(action_log)
+
+        result = subprocess.run(
+            ["zsh", "-f", "-c", command],
+            text=True,
+            capture_output=True,
+            env=environment,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            action_log.read_text(encoding="utf-8").splitlines(), ["complete-context"]
+        )
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_native_completion_receives_filtered_context(self) -> None:
         completion = self.directory / "_wrapped-native"
         script = render_completion_script(Shell.ZSH, str(self.wrapper), "real-command")
@@ -1032,6 +1092,45 @@ print -rl -- "${{captured[@]}}"
                 "--selector",
                 "--plugin-command",
             ],
+        )
+
+    @unittest.skipUnless(shutil.which("fish"), "fish is not installed")
+    def test_fish_uses_one_merged_wrapper_request(self) -> None:
+        completion = self.directory / "wrapped-single-request.fish"
+        script = render_completion_script(Shell.FISH, str(self.wrapper), "real-command")
+        completion.write_text(script, encoding="utf-8")
+        match = re.search(
+            r"^function (__engulf_complete_[0-9a-f]+)", script, re.MULTILINE
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        function_name = match.group(1)
+        action_log = self.directory / "fish-actions.log"
+        command = f"""
+function commandline
+    if test "$argv[1]" = -opc
+        printf '%s\\n' {shlex.quote(str(self.wrapper))} --
+    end
+end
+function complete
+end
+source {shlex.quote(str(completion))}
+{function_name}
+"""
+        environment = self.environment()
+        environment["ENGULF_TEST_ACTION_LOG"] = str(action_log)
+
+        result = subprocess.run(
+            ["fish", "--no-config", "-c", command],
+            text=True,
+            capture_output=True,
+            env=environment,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            action_log.read_text(encoding="utf-8").splitlines(), ["complete-context"]
         )
 
     def test_completion_generator_inspects_wrapper(self) -> None:

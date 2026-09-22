@@ -73,6 +73,13 @@ class CompiledAutocompletionTests(unittest.TestCase):
             self.assertIsNone(
                 store.load(path, fingerprint=completion_environment_fingerprint({}))
             )
+            installed = completion_environment_fingerprint(
+                {"plugins": ["status", "new-provider"]}
+            )
+            removed = completion_environment_fingerprint({"plugins": ["status"]})
+            self.assertNotEqual(installed, removed)
+            self.assertIsNone(store.load(path, fingerprint=installed))
+            self.assertEqual(store.load(path, fingerprint=removed), compiled.manifest)
 
     def test_static_manifest_evaluates_without_runtime_bindings(self) -> None:
         arguments = ArgumentRegistry()

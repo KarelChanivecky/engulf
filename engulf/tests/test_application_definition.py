@@ -30,6 +30,9 @@ class DefinitionGoal(Goal[str]):
 
     def __init__(self) -> None:
         self.setup_display_name: str | None = None
+        self.setup_plugin_ids: tuple[str, ...] = ()
+        self.setup_postprocess_plugin_ids: tuple[str, ...] = ()
+        self.setup_dependency_map: dict[str, tuple[str, ...]] = {}
 
     @property
     def contract(self) -> GoalContract:
@@ -38,6 +41,9 @@ class DefinitionGoal(Goal[str]):
     def setup(self, api: GoalSetupAPI) -> None:
         self.setup_display_name = api.display_name
         self.setup_application = api.application
+        self.setup_plugin_ids = api.plugin_ids
+        self.setup_postprocess_plugin_ids = api.postprocess_plugin_ids
+        self.setup_dependency_map = dict(api.dependency_map)
 
     def achieve(
         self,
@@ -96,6 +102,9 @@ class ApplicationDefinitionTestCase(unittest.TestCase):
         self.assertEqual(len(goals), 2)
         self.assertIsNot(first.goal, second.goal)
         self.assertEqual(first.application_metadata, goals[0].setup_application)
+        self.assertEqual(goals[0].setup_plugin_ids, ())
+        self.assertEqual(goals[0].setup_postprocess_plugin_ids, ())
+        self.assertEqual(goals[0].setup_dependency_map, {})
         self.assertEqual(first.invoke(()).value, "definition-app")
         self.assertEqual(second.invoke(()).value, "definition-app")
 
