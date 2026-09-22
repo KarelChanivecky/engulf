@@ -392,9 +392,9 @@ def _predicate_slot_requested(
     slot_id: str,
     manifest: CompletionManifest,
 ) -> bool:
-    return any(
-        option.when_slot == slot_id for option in manifest.options
-    ) or any(candidate.when_slot == slot_id for candidate in manifest.candidates)
+    return any(option.when_slot == slot_id for option in manifest.options) or any(
+        candidate.when_slot == slot_id for candidate in manifest.candidates
+    )
 
 
 def _find_assignment(
