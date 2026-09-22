@@ -13,7 +13,10 @@ from engulf_executable_wrapper_api import (
     CompletionCallable,
     CompletionCandidate,
     CompletionContext,
+    CompletionMatch,
+    CompletionPredicate,
     CompletionProvider,
+    RuntimeCompletion,
     Shell,
     invoke_provider,
     normalize_candidate,
@@ -54,12 +57,16 @@ def handle_internal_protocol(
         return 0
 
     if action == "complete":
-        context = CompletionContext(
-            shell=shell,
-            wrapper_command=os.environ.get("ENGULF_INTERNAL_WRAPPER_COMMAND", ""),
-            binary=goal.executable,
-            words=words,
-            cursor_index=cursor_index,
+        normalized, normalized_cursor, _ = _normalize_for_binary(
+            goal.arguments, words, cursor_index
+        )
+        context = _completion_context(
+            shell,
+            goal,
+            words,
+            cursor_index,
+            binary_words=normalized,
+            binary_cursor_index=normalized_cursor,
         )
         native_available = os.environ.get("ENGULF_INTERNAL_NATIVE") == "1"
         candidates = collect_candidates(
@@ -70,7 +77,72 @@ def handle_internal_protocol(
         _write_nul_records(candidate.value for candidate in candidates)
         return 0
 
+    if action == "complete-context":
+        normalized, normalized_cursor, current_hidden = _normalize_for_binary(
+            goal.arguments, words, cursor_index
+        )
+        context = _completion_context(
+            shell,
+            goal,
+            words,
+            cursor_index,
+            binary_words=normalized,
+            binary_cursor_index=normalized_cursor,
+        )
+        binary_candidates, wrapper_candidates = _candidate_groups(goal, context)
+        protocol_cursor = -1 if current_hidden else normalized_cursor
+        _write_context_records(
+            protocol_cursor,
+            normalized,
+            wrapper_candidates,
+            binary_candidates,
+        )
+        return 0
+
     raise ValueError(f"unsupported internal action: {action!r}")
+
+
+def _completion_context(
+    shell: Shell,
+    goal: ExecutableWrapperGoal,
+    words: tuple[str, ...],
+    cursor_index: int,
+    *,
+    binary_words: tuple[str, ...] | None = None,
+    binary_cursor_index: int | None = None,
+) -> CompletionContext:
+    return CompletionContext(
+        shell=shell,
+        wrapper_command=os.environ.get("ENGULF_INTERNAL_WRAPPER_COMMAND", ""),
+        binary=goal.executable,
+        words=words,
+        cursor_index=cursor_index,
+        binary_words=binary_words,
+        binary_cursor_index=binary_cursor_index,
+        cwd=os.getcwd(),
+        environment=tuple(sorted(os.environ.items())),
+    )
+
+
+def completion_context_for_request(
+    goal: ExecutableWrapperGoal,
+    argv: tuple[str, ...],
+) -> CompletionContext:
+    """Build the immutable provider context for the current internal request."""
+    shell = Shell(os.environ["ENGULF_INTERNAL_SHELL"])
+    cursor_index = int(os.environ["ENGULF_INTERNAL_CWORD"])
+    words = _ensure_current_word(argv, cursor_index)
+    normalized, normalized_cursor, _ = _normalize_for_binary(
+        goal.arguments, words, cursor_index
+    )
+    return _completion_context(
+        shell,
+        goal,
+        words,
+        cursor_index,
+        binary_words=normalized,
+        binary_cursor_index=normalized_cursor,
+    )
 
 
 def collect_candidates(
@@ -79,27 +151,64 @@ def collect_candidates(
     *,
     include_binary_provider: bool,
 ) -> tuple[CompletionCandidate, ...]:
-    candidates: list[CompletionCandidate] = []
+    binary_candidates, wrapper_candidates = _candidate_groups(goal, context)
+    candidates = (
+        (binary_candidates + wrapper_candidates)
+        if include_binary_provider
+        else wrapper_candidates
+    )
+    return _deduplicate_candidates(candidates, context.current)
 
+
+def _candidate_groups(
+    goal: ExecutableWrapperGoal,
+    context: CompletionContext,
+) -> tuple[tuple[CompletionCandidate, ...], tuple[CompletionCandidate, ...]]:
+    binary_candidates: list[CompletionCandidate] = []
     current_hidden = context.cursor_index in _hidden_binary_indexes(
         goal.arguments, context.words
     )
-    if (
-        include_binary_provider
-        and not current_hidden
-        and goal.completion_provider is not None
-    ):
-        candidates.extend(_provider_candidates(goal.completion_provider, context))
+    if not current_hidden and goal.completion_provider is not None:
+        binary_candidates.extend(
+            _provider_candidates(goal.completion_provider, context)
+        )
 
-    candidates.extend(_argument_candidates(goal.arguments, context))
-    candidates.extend(goal.completions.static_candidates(context))
-    for provider in goal.completions.providers:
-        candidates.extend(_provider_candidates(provider, context))
+    compiled = goal.compiled_completion
+    if compiled is not None:
+        wrapper_candidates = list(compiled.candidates(context))
+    else:
+        wrapper_candidates = _argument_candidates(goal.arguments, context)
+        wrapper_candidates.extend(goal.completions.static_candidates(context))
+        for record in goal.completions.provider_records:
+            wrapper_candidates.extend(
+                _provider_candidates(
+                    RuntimeCompletion(record.provider_id, record.provider, record.when),
+                    context,
+                )
+            )
 
+    return (
+        tuple(
+            candidate
+            for candidate in binary_candidates
+            if candidate.value.startswith(context.current)
+        ),
+        tuple(
+            candidate
+            for candidate in wrapper_candidates
+            if candidate.value.startswith(context.current)
+        ),
+    )
+
+
+def _deduplicate_candidates(
+    candidates: Iterable[CompletionCandidate],
+    current: str,
+) -> tuple[CompletionCandidate, ...]:
     deduplicated: list[CompletionCandidate] = []
     positions: dict[str, int] = {}
     for candidate in candidates:
-        if not candidate.value.startswith(context.current):
+        if not candidate.value.startswith(current):
             continue
         existing = positions.get(candidate.value)
         if existing is None:
@@ -141,7 +250,7 @@ def _argument_candidates(
     if "--" in prior_words:
         return result
     for spec in registry.options:
-        if spec.when is not None and not spec.when(context):
+        if spec.when is not None and not _matches_predicate(spec.when, context):
             continue
         if not spec.repeatable and _option_was_used(spec.names, prior_words):
             continue
@@ -159,13 +268,26 @@ def _argument_candidates(
 
 
 def _provider_candidates(
-    provider: CompletionCallable | CompletionProvider,
+    provider: CompletionCallable | CompletionProvider | RuntimeCompletion,
     context: CompletionContext,
 ) -> list[CompletionCandidate]:
+    if isinstance(provider, RuntimeCompletion):
+        if provider.when is not None and not provider.when.matches(context):
+            return []
+        provider = provider.provider
     return [
         normalize_candidate(candidate)
         for candidate in invoke_provider(provider, context)
     ]
+
+
+def _matches_predicate(
+    predicate: CompletionPredicate,
+    context: CompletionContext,
+) -> bool:
+    if isinstance(predicate, CompletionMatch):
+        return predicate.matches(context)
+    return bool(predicate(context))
 
 
 def _context_with_current(
@@ -181,6 +303,10 @@ def _context_with_current(
         context.binary,
         tuple(words),
         context.cursor_index,
+        context.binary_words,
+        context.binary_cursor_index,
+        context.cwd,
+        context.environment,
     )
 
 
@@ -361,18 +487,38 @@ def _render_bash(
         _engulf_reply_prefix=${{_engulf_logical_current%"$_engulf_raw_current"}}
     fi
 
-    local -a _engulf_normalized=()
-    mapfile -d '' -t _engulf_normalized < <(
-        command env ENGULF_INTERNAL_PROTOCOL=1 ENGULF_INTERNAL_ACTION=normalize \\
+    local -a _engulf_context=()
+    mapfile -d '' -t _engulf_context < <(
+        command env ENGULF_INTERNAL_PROTOCOL=1 ENGULF_INTERNAL_ACTION=complete-context \\
             ENGULF_INTERNAL_SHELL=bash ENGULF_INTERNAL_CWORD="$_engulf_arg_index" \\
             ENGULF_INTERNAL_WRAPPER_COMMAND="$_engulf_wrapper" \\
             "$_engulf_wrapper" "${{_engulf_args[@]}}" 2>/dev/null
     )
-    local _engulf_normalized_index=${{_engulf_normalized[0]:-$_engulf_arg_index}}
-    local -a _engulf_binary_args=("${{_engulf_normalized[@]:1}}")
-    if (( ${{#_engulf_normalized[@]}} == 0 )); then
-        _engulf_binary_args=("${{_engulf_args[@]}}")
-    fi
+    local _engulf_context_index=0
+    local _engulf_normalized_index=${{_engulf_context[_engulf_context_index]:-$_engulf_arg_index}}
+    ((_engulf_context_index++))
+    local _engulf_normalized_count=${{_engulf_context[_engulf_context_index]:-0}}
+    ((_engulf_context_index++))
+    local -a _engulf_binary_args=()
+    local _engulf_index
+    for ((_engulf_index = 0; _engulf_index < _engulf_normalized_count; _engulf_index++)); do
+        _engulf_binary_args+=("${{_engulf_context[_engulf_context_index]}}")
+        ((_engulf_context_index++))
+    done
+    local _engulf_wrapper_count=${{_engulf_context[_engulf_context_index]:-0}}
+    ((_engulf_context_index++))
+    local -a _engulf_extra=()
+    for ((_engulf_index = 0; _engulf_index < _engulf_wrapper_count; _engulf_index++)); do
+        _engulf_extra+=("${{_engulf_context[_engulf_context_index]}}")
+        ((_engulf_context_index++))
+    done
+    local _engulf_binary_count=${{_engulf_context[_engulf_context_index]:-0}}
+    ((_engulf_context_index++))
+    local -a _engulf_binary_candidates=()
+    for ((_engulf_index = 0; _engulf_index < _engulf_binary_count; _engulf_index++)); do
+        _engulf_binary_candidates+=("${{_engulf_context[_engulf_context_index]}}")
+        ((_engulf_context_index++))
+    done
 
     local _engulf_spec=""
     local _engulf_base_function=""
@@ -443,29 +589,28 @@ def _render_bash(
         done
     fi
 
-    local -a _engulf_extra=()
-    mapfile -d '' -t _engulf_extra < <(
-        command env ENGULF_INTERNAL_PROTOCOL=1 ENGULF_INTERNAL_ACTION=complete \\
-            ENGULF_INTERNAL_SHELL=bash ENGULF_INTERNAL_CWORD="$_engulf_arg_index" \\
-            ENGULF_INTERNAL_NATIVE="$_engulf_native" \\
-            ENGULF_INTERNAL_WRAPPER_COMMAND="$_engulf_wrapper" \\
-            "$_engulf_wrapper" "${{_engulf_args[@]}}" 2>/dev/null
-    )
     if [[ -n $_engulf_reply_prefix ]]; then
         local _engulf_extra_index
-        for ((_engulf_extra_index = 0; \
-                _engulf_extra_index < ${{#_engulf_extra[@]}}; \
-                _engulf_extra_index++)); do
-            if [[ ${{_engulf_extra[_engulf_extra_index]}} == "$_engulf_reply_prefix"* ]]; then
-                _engulf_extra[_engulf_extra_index]=${{_engulf_extra[_engulf_extra_index]#"$_engulf_reply_prefix"}}
-            fi
+        local _engulf_candidate_array
+        for _engulf_candidate_array in _engulf_extra _engulf_binary_candidates; do
+            local -n _engulf_candidates_ref=$_engulf_candidate_array
+            for ((_engulf_index = 0; _engulf_index < ${{#_engulf_candidates_ref[@]}}; _engulf_index++)); do
+                if [[ ${{_engulf_candidates_ref[_engulf_index]}} == "$_engulf_reply_prefix"* ]]; then
+                    _engulf_candidates_ref[_engulf_index]=${{_engulf_candidates_ref[_engulf_index]#"$_engulf_reply_prefix"}}
+                fi
+            done
         done
     fi
 
     COMPREPLY=()
     local -A _engulf_seen=()
     local _engulf_candidate
-    for _engulf_candidate in "${{_engulf_native_replies[@]}}" "${{_engulf_extra[@]}}"; do
+    local -a _engulf_candidates=()
+    if (( ! _engulf_has_native )); then
+        _engulf_candidates+=("${{_engulf_binary_candidates[@]}}")
+    fi
+    _engulf_candidates+=("${{_engulf_extra[@]}}")
+    for _engulf_candidate in "${{_engulf_native_replies[@]}}" "${{_engulf_candidates[@]}}"; do
         [[ -n $_engulf_candidate ]] || continue
         [[ -n ${{_engulf_seen["$_engulf_candidate"]+present}} ]] && continue
         _engulf_seen["$_engulf_candidate"]=1
@@ -481,7 +626,7 @@ def _render_bash(
         done
         if (( _engulf_continues )); then
             compopt -o nospace 2>/dev/null || true
-        elif (( ${{#_engulf_extra[@]}} )); then
+        elif (( ${{#_engulf_candidates[@]}} )); then
             compopt +o nospace 2>/dev/null || true
         fi
     fi
@@ -517,22 +662,38 @@ def _render_zsh(
         _engulf_args+=("")
     fi
 
-    local -a _engulf_normalized
-    _engulf_normalized=("${{(@0)$(
-        command env ENGULF_INTERNAL_PROTOCOL=1 ENGULF_INTERNAL_ACTION=normalize \\
+    local -a _engulf_context
+    _engulf_context=("${{(@0)$(
+        command env ENGULF_INTERNAL_PROTOCOL=1 ENGULF_INTERNAL_ACTION=complete-context \\
             ENGULF_INTERNAL_SHELL=zsh ENGULF_INTERNAL_CWORD="$_engulf_arg_index" \\
             ENGULF_INTERNAL_WRAPPER_COMMAND="$_engulf_wrapper" \\
             "$_engulf_wrapper" "${{_engulf_args[@]}}" 2>/dev/null
         )}}")
-    if (( ${{#_engulf_normalized}} )) && [[ -z ${{_engulf_normalized[-1]}} ]]; then
-        _engulf_normalized[-1]=()
-    fi
-    local _engulf_normalized_index=${{_engulf_normalized[1]:-$_engulf_arg_index}}
+    local _engulf_context_index=1
+    local _engulf_normalized_index=${{_engulf_context[_engulf_context_index]:-$_engulf_arg_index}}
+    ((_engulf_context_index++))
+    local _engulf_normalized_count=${{_engulf_context[_engulf_context_index]:-0}}
+    ((_engulf_context_index++))
     local -a _engulf_binary_args
-    _engulf_binary_args=("${{(@)_engulf_normalized[2,-1]}}")
-    if (( ${{#_engulf_normalized}} == 0 )); then
-        _engulf_binary_args=("${{_engulf_args[@]}}")
-    fi
+    local _engulf_index
+    for ((_engulf_index = 0; _engulf_index < _engulf_normalized_count; _engulf_index++)); do
+        _engulf_binary_args+=("${{_engulf_context[_engulf_context_index]}}")
+        ((_engulf_context_index++))
+    done
+    local _engulf_wrapper_count=${{_engulf_context[_engulf_context_index]:-0}}
+    ((_engulf_context_index++))
+    local -a _engulf_extra
+    for ((_engulf_index = 0; _engulf_index < _engulf_wrapper_count; _engulf_index++)); do
+        _engulf_extra+=("${{_engulf_context[_engulf_context_index]}}")
+        ((_engulf_context_index++))
+    done
+    local _engulf_binary_count=${{_engulf_context[_engulf_context_index]:-0}}
+    ((_engulf_context_index++))
+    local -a _engulf_binary_candidates
+    for ((_engulf_index = 0; _engulf_index < _engulf_binary_count; _engulf_index++)); do
+        _engulf_binary_candidates+=("${{_engulf_context[_engulf_context_index]}}")
+        ((_engulf_context_index++))
+    done
 
     local _engulf_native=0
     local _engulf_base_function=""
@@ -576,18 +737,10 @@ def _render_zsh(
         service=$_engulf_saved_service
     fi
 
-    local -a _engulf_extra
-    _engulf_extra=("${{(@0)$(
-        command env ENGULF_INTERNAL_PROTOCOL=1 ENGULF_INTERNAL_ACTION=complete \\
-            ENGULF_INTERNAL_SHELL=zsh ENGULF_INTERNAL_CWORD="$_engulf_arg_index" \\
-            ENGULF_INTERNAL_NATIVE="$_engulf_native" \\
-            ENGULF_INTERNAL_WRAPPER_COMMAND="$_engulf_wrapper" \\
-            "$_engulf_wrapper" "${{_engulf_args[@]}}" 2>/dev/null
-        )}}")
-    if (( ${{#_engulf_extra}} )) && [[ -z ${{_engulf_extra[-1]}} ]]; then
-        _engulf_extra[-1]=()
-    fi
-    (( ${{#_engulf_extra}} )) && compadd -- "${{_engulf_extra[@]}}"
+    local -a _engulf_candidates
+    (( ! _engulf_has_native )) && _engulf_candidates=("${{_engulf_binary_candidates[@]}}")
+    _engulf_candidates+=("${{_engulf_extra[@]}}")
+    (( ${{#_engulf_candidates}} )) && compadd -- "${{_engulf_candidates[@]}}"
 }}
 
 if [[ -n ${{CURRENT-}} ]] && (( ${{#words}} )); then
@@ -626,23 +779,46 @@ function {helper_name}
     end
     set -l _engulf_arg_index (math (count $_engulf_args) - 1)
 
-    set -l _engulf_normalized (command env ENGULF_INTERNAL_PROTOCOL=1 \
-        ENGULF_INTERNAL_ACTION=normalize ENGULF_INTERNAL_SHELL=fish \
+    set -l _engulf_context (command env ENGULF_INTERNAL_PROTOCOL=1 \
+        ENGULF_INTERNAL_ACTION=complete-context ENGULF_INTERNAL_SHELL=fish \
         ENGULF_INTERNAL_CWORD=$_engulf_arg_index \
         ENGULF_INTERNAL_WRAPPER_COMMAND=$_engulf_wrapper \
         $_engulf_wrapper $_engulf_args 2>/dev/null | string split0)
-    set -l _engulf_normalized_index $_engulf_arg_index
-    if test (count $_engulf_normalized) -gt 0
-        set _engulf_normalized_index $_engulf_normalized[1]
-        set -e _engulf_normalized[1]
-    else
-        set _engulf_normalized $_engulf_args
+    set -l _engulf_context_index 1
+    set -l _engulf_normalized_index $_engulf_context[$_engulf_context_index]
+    set _engulf_context_index (math $_engulf_context_index + 1)
+    set -l _engulf_normalized_count $_engulf_context[$_engulf_context_index]
+    set _engulf_context_index (math $_engulf_context_index + 1)
+    set -l _engulf_binary_args
+    set -l _engulf_index 0
+    while test $_engulf_index -lt $_engulf_normalized_count
+        set -a _engulf_binary_args $_engulf_context[$_engulf_context_index]
+        set _engulf_context_index (math $_engulf_context_index + 1)
+        set _engulf_index (math $_engulf_index + 1)
+    end
+    set -l _engulf_wrapper_count $_engulf_context[$_engulf_context_index]
+    set _engulf_context_index (math $_engulf_context_index + 1)
+    set -l _engulf_extra
+    set _engulf_index 0
+    while test $_engulf_index -lt $_engulf_wrapper_count
+        set -a _engulf_extra $_engulf_context[$_engulf_context_index]
+        set _engulf_context_index (math $_engulf_context_index + 1)
+        set _engulf_index (math $_engulf_index + 1)
+    end
+    set -l _engulf_binary_count $_engulf_context[$_engulf_context_index]
+    set _engulf_context_index (math $_engulf_context_index + 1)
+    set -l _engulf_binary_candidates
+    set _engulf_index 0
+    while test $_engulf_index -lt $_engulf_binary_count
+        set -a _engulf_binary_candidates $_engulf_context[$_engulf_context_index]
+        set _engulf_context_index (math $_engulf_context_index + 1)
+        set _engulf_index (math $_engulf_index + 1)
     end
 
     set -l _engulf_native 0
     set -l _engulf_native_replies
     if type -q $_engulf_binary
-        set -l _engulf_line (string join ' ' (string escape -- $_engulf_binary $_engulf_normalized))
+        set -l _engulf_line (string join ' ' (string escape -- $_engulf_binary $_engulf_binary_args))
         if test $_engulf_normalized_index -ge 0
             set _engulf_native_replies (complete -C "$_engulf_line" 2>/dev/null)
         end
@@ -667,11 +843,10 @@ function {helper_name}
     if test (count $_engulf_native_replies) -gt 0
         printf '%s\\n' $_engulf_native_replies
     end
-    command env ENGULF_INTERNAL_PROTOCOL=1 ENGULF_INTERNAL_ACTION=complete \
-        ENGULF_INTERNAL_SHELL=fish ENGULF_INTERNAL_CWORD=$_engulf_arg_index \
-        ENGULF_INTERNAL_NATIVE=$_engulf_native \
-        ENGULF_INTERNAL_WRAPPER_COMMAND=$_engulf_wrapper \
-        $_engulf_wrapper $_engulf_args 2>/dev/null | string split0
+    if test $_engulf_native -eq 0
+        printf '%s\\n' $_engulf_binary_candidates
+    end
+    printf '%s\\n' $_engulf_extra
 end
 
 complete -c {command_literal} -f -a '({helper_name})'
@@ -699,3 +874,22 @@ def _write_nul_records(records: Iterable[str]) -> None:
         output.write(os.fsencode(record))
         output.write(b"\0")
     output.flush()
+
+
+def _write_context_records(
+    normalized_cursor: int,
+    normalized: tuple[str, ...],
+    wrapper_candidates: tuple[CompletionCandidate, ...],
+    binary_candidates: tuple[CompletionCandidate, ...],
+) -> None:
+    records = (
+        str(normalized_cursor),
+        str(len(normalized)),
+        *normalized,
+        str(len(wrapper_candidates)),
+        *(candidate.value for candidate in wrapper_candidates),
+        str(len(binary_candidates)),
+        *(candidate.value for candidate in binary_candidates),
+        "ENGULF_CONTEXT_END",
+    )
+    _write_nul_records(records)

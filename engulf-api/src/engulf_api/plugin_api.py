@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from typing import Literal, TypeVar, overload
 
@@ -126,6 +126,16 @@ class GoalSetupAPI(RegistrationAPI):
     @abstractmethod
     def plugin_ids(self) -> tuple[str, ...]:
         """Return active plugin IDs in preprocessing order."""
+
+    @property
+    @abstractmethod
+    def postprocess_plugin_ids(self) -> tuple[str, ...]:
+        """Return active plugin IDs in postprocessing order."""
+
+    @property
+    def dependency_map(self) -> Mapping[str, tuple[str, ...]]:
+        """Return the active hard-dependency closure for manifest compilation."""
+        return {}
 
     @abstractmethod
     def dispatch(

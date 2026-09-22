@@ -40,6 +40,8 @@ class _RuntimeGoalSetupAPI(GoalSetupAPI):
         dispatch: _SetupDispatch,
         application: ApplicationMetadata,
         plugin_ids: tuple[str, ...],
+        postprocess_plugin_ids: tuple[str, ...],
+        dependency_map: Mapping[str, tuple[str, ...]],
         elevated: bool,
     ) -> None:
         if not isinstance(application, ApplicationMetadata):
@@ -50,6 +52,8 @@ class _RuntimeGoalSetupAPI(GoalSetupAPI):
         self._dispatch = dispatch
         self._application = application
         self._plugin_ids = plugin_ids
+        self._postprocess_plugin_ids = postprocess_plugin_ids
+        self._dependency_map = dict(dependency_map)
         self._elevated = elevated
         self._active = True
 
@@ -84,6 +88,14 @@ class _RuntimeGoalSetupAPI(GoalSetupAPI):
     @property
     def plugin_ids(self) -> tuple[str, ...]:
         return self._plugin_ids
+
+    @property
+    def postprocess_plugin_ids(self) -> tuple[str, ...]:
+        return self._postprocess_plugin_ids
+
+    @property
+    def dependency_map(self) -> Mapping[str, tuple[str, ...]]:
+        return self._dependency_map
 
     def dispatch(
         self,

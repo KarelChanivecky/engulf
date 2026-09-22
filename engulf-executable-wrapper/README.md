@@ -252,7 +252,11 @@ metadata are documented in
 
 ## Public Import Surface
 
-`engulf_executable_wrapper` exports only `ExecutableWrapperGoal` and
-`render_completion_script`. Import `Shell`, events, outcomes, contribution types,
-registries, and the plugin base from `engulf_executable_wrapper_api`. Import
-`ApplicationDefinition`, policies, and runtime configuration from `engulf`.
+`engulf_executable_wrapper` also exports `CompiledCompletion`,
+`CompletionArtifactStore`, `compile_completion`, and
+`completion_environment_fingerprint`. These helpers evaluate a compiled manifest,
+publish it atomically, and reject it when installed metadata has changed. It still
+exports `ExecutableWrapperGoal` and `render_completion_script`. Import `Shell`,
+events, outcomes, contribution types, registries, and the plugin base from
+`engulf_executable_wrapper_api`. Import `ApplicationDefinition`, policies, and
+runtime configuration from `engulf`.

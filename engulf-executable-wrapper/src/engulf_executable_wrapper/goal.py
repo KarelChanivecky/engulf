@@ -53,6 +53,8 @@ from engulf_executable_wrapper_api import (
 
 from engulf import LOG_LEVEL_NAMES, logging_option_names
 
+from .autocompletion import CompiledCompletion
+
 _FORWARDED_SIGNALS = (
     signal.SIGHUP,
     signal.SIGINT,
@@ -79,7 +81,8 @@ def _register_arguments(
     event: _SetupEvent,
     api: RegistrationAPI,
 ) -> None:
-    plugin.register_arguments(event.arguments, api)
+    with event.arguments.owner(plugin.plugin_id):
+        plugin.register_arguments(event.arguments, api)
 
 
 def _register_completions(
@@ -87,7 +90,8 @@ def _register_completions(
     event: _SetupEvent,
     api: RegistrationAPI,
 ) -> None:
-    plugin.register_completions(event.completions, api)
+    with event.completions.owner(plugin.plugin_id):
+        plugin.register_completions(event.completions, api)
 
 
 def _collect_help(
@@ -289,6 +293,7 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
         self._display_name: str | None = None
         self._plugin_ids: tuple[str, ...] = ()
         self._setup_complete = False
+        self._compiled_completion: CompiledCompletion | None = None
 
     @property
     def contract(self) -> GoalContract:
@@ -314,6 +319,62 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
     def source_completion(self) -> bool:
         return self._source_completion
 
+    @property
+    def compiled_completion(self) -> CompiledCompletion | None:
+        """Return the schema collected during setup, if setup completed."""
+        return self._compiled_completion
+
+    @classmethod
+    def from_compiled_completion(
+        cls,
+        executable: str | os.PathLike[str],
+        compiled: CompiledCompletion,
+        *,
+        display_name: str,
+        source_completion: bool = False,
+    ) -> ExecutableWrapperGoal:
+        """Create a setup-free goal backed by a persisted completion manifest.
+
+        The reconstructed argument registry contains only normalization metadata;
+        provider callables remain absent until a selective activation session
+        supplies a live goal.  This keeps static completion import-free.
+        """
+        if not isinstance(compiled, CompiledCompletion):
+            raise TypeError("compiled must be a CompiledCompletion")
+        goal = cls(executable, source_completion=source_completion)
+        goal._display_name = display_name
+        goal._compiled_completion = CompiledCompletion.from_manifest(
+            compiled.manifest,
+            {
+                slot.slot_id: goal._complete_builtin
+                for slot in compiled.manifest.slots
+                if slot.owner_id is None
+                and slot.kind == "provider"
+                and slot.provider_id.startswith("goal:")
+            },
+        )
+        for option in compiled.manifest.options:
+            goal._arguments.option(
+                *option.names,
+                takes_value=option.takes_value,
+                value_completer=None,
+                visible_to_binary_completion=option.visible_to_binary_completion,
+                suggest_assignment=option.suggest_assignment,
+                repeatable=option.repeatable,
+                when=option.when_matcher,
+                environment=option.environment,
+            )
+        goal._setup_complete = True
+        return goal
+
+    def replace_compiled_completion(self, compiled: CompiledCompletion) -> None:
+        """Replace the compiled binding after an application replays setup."""
+        if not self._setup_complete:
+            raise RuntimeError("executable-wrapper goal has not been set up")
+        if not isinstance(compiled, CompiledCompletion):
+            raise TypeError("compiled must be a CompiledCompletion")
+        self._compiled_completion = compiled
+
     def setup(self, api: GoalSetupAPI) -> None:
         if self._setup_complete:
             raise RuntimeError("an ExecutableWrapperGoal can belong to one application")
@@ -324,6 +385,13 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
         api.dispatch(_REGISTER_ARGUMENTS, event)
         api.dispatch(_REGISTER_COMPLETIONS, event)
         self._completions.provider(self._complete_builtin)
+        self._compiled_completion = CompiledCompletion.from_registries(
+            self._arguments,
+            self._completions,
+            dependencies=api.dependency_map,
+            preprocess_order=self._plugin_ids,
+            postprocess_order=api.postprocess_plugin_ids,
+        )
         help_blocks: list[tuple[str, str]] = []
         for contribution in api.dispatch(_COLLECT_HELP, event):
             block = contribution.value

@@ -496,8 +496,20 @@ candidates for that context.
 `wrapper_command`, configured `binary`, argument `words` excluding the wrapper
 command, and the argument-relative `cursor_index`. Its `current` property safely
 returns the word being completed or `""`; `previous` returns the preceding word or
-`None`. Predicates and providers should be deterministic and should filter or
-generate candidates from this immutable context.
+`None`. Compiled requests may also provide normalized `binary_words` and
+`binary_cursor_index`, the request `cwd`, and an immutable environment snapshot.
+Predicates and providers should be deterministic and should filter or generate
+candidates from this immutable context.
+
+Compiled completion support adds `CompletionMatch` and its `Match` factories for
+serializable selectors, plus `RuntimeCompletion` (also exported as `Runtime`) for
+owner-bound runtime providers. `RegisteredCompletionProvider` preserves provider
+ownership during collection. `CompletionManifest`, `CompletionSlot`,
+`CompiledOption`, `CompiledCandidate`, and `CompiledProvider` are immutable schema
+records. `build_manifest()` lowers the registries to that schema and
+`manifest_from_json()` restores it; `AUTOCOMPLETION_SCHEMA_VERSION` identifies the
+wire format. Generated source contains only the manifest data, never provider
+callables.
 
 At runtime, option-value candidates support both a separate value and
 `--option=value`. Literal candidates are prefix-filtered. Candidates from the
@@ -525,7 +537,7 @@ block to the stable plugin ID.
 | Calls | `CallMode`, `BeforeCallEvent`, `PreparedCallEvent`, `PreparationFailedEvent`, `AfterCallEvent`, `CallOutcome`, `OutcomeKind` |
 | Contributions | `CallContribution`, `ArgumentAddition`, `AdditionPlacement` |
 | Argument metadata | `ArgumentRegistry`, `OptionSpec` |
-| Completion | `Shell`, `CompletionContext`, `CompletionCandidate`, `CandidateLike`, `CompletionPredicate`, `CompletionCallable`, `CompletionProvider`, `CompletionRegistry`, `invoke_provider`, `normalize_candidate` |
+| Completion | `Shell`, `CompletionContext`, `CompletionCandidate`, `CandidateLike`, `CompletionPredicate`, `CompletionCallable`, `CompletionProvider`, `CompletionRegistry`, `CompletionMatch`, `Match`, `RuntimeCompletion`, `Runtime`, `RegisteredCompletionProvider`, `CompletionManifest`, `CompletionSlot`, `CompiledOption`, `CompiledCandidate`, `CompiledProvider`, `AUTOCOMPLETION_SCHEMA_VERSION`, `build_manifest`, `manifest_from_json`, `invoke_provider`, `normalize_candidate` |
 
 Generic lifecycle, metadata, state, context, logging, dependency, and elevation
 contracts remain owned by `engulf-api` and are imported from `engulf_api`.

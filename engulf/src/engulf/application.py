@@ -646,6 +646,13 @@ class Application[ResultT]:
                 dispatch,
                 self._application_metadata,
                 tuple(item.plugin_id for item in self._preprocess_order),
+                tuple(item.plugin_id for item in self._postprocess_order),
+                {
+                    item.plugin_id: tuple(
+                        dependency.plugin_id for dependency in item.dependencies
+                    )
+                    for item in self._preprocess_order
+                },
                 self._elevated,
             )
             try:

@@ -320,6 +320,9 @@ class CompletionTestCase(unittest.TestCase):
             self.assertEqual(zsh.returncode, 0, zsh.stderr)
         self.assertIn("completion zsh", zsh_script)
         self.assertIn("ENGULF_INTERNAL_SHELL=fish", fish_script)
+        for script in (bash_script, zsh_script, fish_script):
+            self.assertEqual(script.count("ENGULF_INTERNAL_ACTION=complete-context"), 1)
+            self.assertNotIn("ENGULF_INTERNAL_ACTION=normalize", script)
         self.assertIn("completion fish", fish_script)
         self.assertIn("set -a _engulf_args ''", fish_script)
         self.assertIn("printf '%s\\n'", fish_script)
@@ -454,8 +457,15 @@ class ShellCompletionIntegrationTestCase(unittest.TestCase):
             textwrap.dedent(
                 f"""\
                 #!{sys.executable}
+                import os
                 from pathlib import Path
                 from unittest.mock import patch
+
+                _action_log = os.environ.get("ENGULF_TEST_ACTION_LOG")
+                if _action_log:
+                    with Path(_action_log).open("a", encoding="utf-8") as _stream:
+                        _stream.write(os.environ.get("ENGULF_INTERNAL_ACTION", "") + "\\n")
+
                 from engulf import Application
                 from engulf_executable_wrapper import ExecutableWrapperGoal
 
@@ -568,6 +578,36 @@ printf '%s\n' "${{COMPREPLY[@]}}"
                 "--selector",
                 "--plugin-command",
             ],
+        )
+
+    def test_bash_uses_one_merged_wrapper_request(self) -> None:
+        completion = self.directory / "wrapped-single-request.bash"
+        script = render_completion_script(Shell.BASH, str(self.wrapper), "real-command")
+        completion.write_text(script, encoding="utf-8")
+        function_name = self.function_name(script)
+        action_log = self.directory / "actions.log"
+        command = f"""
+source {shlex.quote(str(completion))}
+COMP_WORDS=({shlex.quote(str(self.wrapper))} --)
+COMP_CWORD=1
+COMP_LINE={shlex.quote(str(self.wrapper) + " --")}
+COMP_POINT=${{#COMP_LINE}}
+{function_name}
+"""
+        environment = self.environment()
+        environment["ENGULF_TEST_ACTION_LOG"] = str(action_log)
+
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-c", command],
+            text=True,
+            capture_output=True,
+            env=environment,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            action_log.read_text(encoding="utf-8").splitlines(), ["complete-context"]
         )
 
     def test_bash_keeps_assignment_candidates_in_the_current_word(self) -> None:
