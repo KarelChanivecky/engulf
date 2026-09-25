@@ -110,6 +110,7 @@ class CompletionTestCase(unittest.TestCase):
             [
                 "--base",
                 "--dynamic",
+                "--help",
                 "--engulf-completion-tests-log-level=",
                 "--engulf-completion-tests-plugin-log-level=",
                 "--plugin=",
@@ -600,6 +601,7 @@ printf '%s\n' "${{COMPREPLY[@]}}"
             result.stdout.splitlines(),
             [
                 "--base",
+                "--help",
                 "--engulf-shell-tests-log-level=",
                 "--engulf-shell-tests-plugin-log-level=",
                 "--plugin=",
@@ -912,6 +914,7 @@ print -rl -- "${{captured[@]}}"
             result.stdout.splitlines(),
             [
                 "--base",
+                "--help",
                 "--engulf-shell-tests-log-level=",
                 "--engulf-shell-tests-plugin-log-level=",
                 "--plugin=",
@@ -1086,6 +1089,7 @@ print -rl -- "${{captured[@]}}"
             result.stdout.splitlines(),
             [
                 "--base",
+                "--help",
                 "--engulf-shell-tests-log-level=",
                 "--engulf-shell-tests-plugin-log-level=",
                 "--plugin=",

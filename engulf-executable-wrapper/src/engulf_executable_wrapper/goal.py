@@ -380,6 +380,7 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
             raise RuntimeError("an ExecutableWrapperGoal can belong to one application")
         self._display_name = api.display_name
         self._plugin_ids = api.plugin_ids
+        self._register_help_argument()
         self._register_logging_arguments(api.display_name, api.plugin_ids)
         event = _SetupEvent(self._arguments, self._completions)
         api.dispatch(_REGISTER_ARGUMENTS, event)
@@ -826,6 +827,12 @@ class ExecutableWrapperGoal(Goal[CallOutcome]):
                 plugin_ids,
             ),
             repeatable=True,
+        )
+
+    def _register_help_argument(self) -> None:
+        self._arguments.option(
+            "--help",
+            description="Show help and exit",
         )
 
     @staticmethod
