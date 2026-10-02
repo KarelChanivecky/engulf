@@ -92,5 +92,5 @@ release alone are not evidence that services work.
 
 Future implementation should update owning READMEs, build/install/type/docs/CI
 source lists and package counts as packages actually arrive. Coordinate setup and
-package-list assumptions with the [goal-owned CLI parser plan](../../goal-owned-cli-parser.md).
+package-list assumptions with the [native partial CLI framework plan](../../goal-owned-cli-parser.md).
 Do not replace that separate plan or unrelated concurrent work.

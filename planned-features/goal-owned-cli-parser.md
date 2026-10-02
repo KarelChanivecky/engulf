@@ -1,206 +1,156 @@
-# Goal-owned CLI parser with tracked argv edits
+# Native partial CLI framework for the executable wrapper
 
-Status: planned; implementation has not started.
+Status: planned; implementation has not started. This replaces the goal-owned
+parser proposal that previously occupied this file.
 
 ## Objective
 
-Let a goal supply a parser or command-tree object that the goal and its active,
-compatible plugins share during argument registration. The goal chooses the CLI
-framework and owns its parsing, help, and completion integration. Preserve the
-existing attributed argv contribution model when plugins inspect or modify a call.
+Give the executable-wrapper goal an Engulf-maintained CLI model for the parts of a
+wrapped executable's command line that the goal and its plugins declare. The
+wrapper must work with a partial view: it observes known syntax, expands calls
+through attributed contributions, and forwards unknown child arguments unchanged.
+The model applies automatically without an application opt-in. A plugin's CLI
+declarations do not narrow its invocation participation unless it explicitly
+requests narrower participation.
 
-Supporting multiple frameworks means different goals can choose different parser
-contracts. Plugins receiving a native framework object are coupled to that
-framework through their goal-specific API. Cross-framework plugin portability
-would require a separate common registration interface and is not a prerequisite.
+This is a framework plan. Consumer migration is separate. Work and inspection
+for this plan are limited to this repository and `../engulf-clab`.
 
-## Existing foundations
+## Declarations and package ownership
 
-- `Goal.setup()` and `GoalSetupAPI.dispatch()` already support typed registration
-  phases. No parser-specific lifecycle hook in Engulf core is needed initially.
-- `ExecutableWrapperGoal` already shares an `ArgumentRegistry` and a
-  `CompletionRegistry` with its plugins during setup.
-- `ArgumentRegistry` primarily contains completion metadata. Only options with an
-  explicit environment binding are consumed by existing invocation normalization.
-- Analyzers receive the same immutable original call and return `CallContribution`
-  values. Dispatch associates each contribution with its stable plugin ID.
-- The wrapper merges removals and additions after analysis, then supplies original
-  and effective arguments to preparation and finalization.
-- Completion currently reads the wrapper registries and completion providers; it
-  does not automatically inspect arbitrary parser objects.
+Put immutable CLI declarations, parsed views, and a callback-local `CLIBuilder` in
+`engulf-executable-wrapper-api`. Put the single-pass scanner, help rendering, and
+completion integration in `engulf-executable-wrapper`. The generic `engulf-api` and
+`engulf` packages receive only the goal routing seam; they must not import
+executable-wrapper CLI types or runtime code.
 
-Relevant sources:
+Add `register_cli(builder, api)` to the wrapper plugin contract. Give each setup
+participant its own builder, freeze it after its callback, then merge declarations
+with attributed conflicts. The goal registers its own commands and options through
+the same path, including `install-completion`, `--help`, and
+`--engulf-plugin-help`. Goal-owned commands follow ordinary participation rules;
+an always-participating plugin still receives its outer hooks for them.
 
-- [Goal and phase contracts](../engulf-api/src/engulf_api/goals.py)
-- [Setup dispatch contract](../engulf-api/src/engulf_api/plugin_api.py)
-- [Wrapper plugin contract](../engulf-executable-wrapper-api/src/engulf_executable_wrapper_api/plugin.py)
-- [Argument and completion registries](../engulf-executable-wrapper-api/src/engulf_executable_wrapper_api/registry.py)
-- [Call events and contributions](../engulf-executable-wrapper-api/src/engulf_executable_wrapper_api/models.py)
-- [Wrapper setup, normalization, and merge](../engulf-executable-wrapper/src/engulf_executable_wrapper/goal.py)
-- [Completion runtime](../engulf-executable-wrapper/src/engulf_executable_wrapper/completion.py)
+The builder declares:
 
-## Proposed design
+- nested command paths and whether a command belongs to the child or is handled
+  by a plugin;
+- option aliases, command scope, arity, repeatability, description, environment
+  binding, default, choices, visibility to native completion, and placement before
+  a command, after it, or both;
+- permitted value forms per option: separate word, `--name=value`, or both;
+- fixed-arity positional slots before a command and scoped positionals after it;
+- foreign arity hints for child options that can precede commands, without
+  claiming, validating, consuming, or hiding them;
+- optional command-level rejection of unknown neighboring options and an opt-in
+  to scan after `--` once that command has been resolved;
+- participation rules: every invocation, selected command paths, or use of an
+  owned element.
 
-### Goal-owned registration
+The default participation rule is every invocation, whether or not a plugin
+declares commands or options. An explicit narrower rule is the only way to
+filter its outer hooks and wrapper callbacks. A declared option supplied from its
+bound environment variable counts as used; a default value alone does not.
 
-The goal creates one parser definition per application, registers its own options,
-and passes the same object through a goal-specific setup event to plugin
-registration callbacks in preprocessing order. Define the parser type in the
-goal's plugin contract so compatibility is explicit; do not replace the existing
-wrapper registry parameter with an untyped arbitrary object.
+The same option spelling may have different declarations on disjoint command
+scopes. Overlapping declarations conflict unless they can be merged without
+changing syntax. Existing `register_arguments()` entries reserve their spellings
+across all commands during this merge, so a legacy and scoped declaration of the
+same spelling is an attributed setup error. Legacy registrations retain their
+current completion and environment behavior; they do not acquire new runtime
+syntax validation. Migrating a shared spelling is therefore atomic across its
+declarers. Keep `register_completions()` and the existing help callback as
+compatibility paths.
 
-Use stable phase IDs and module-level forwarding callbacks through managed
-dispatch. Attribute registration failures to the plugin being called. Detect
-duplicate declarations with a documented policy and retain registration ownership
-where needed for diagnostics and option consumption.
+## Scanning, invocation, and edits
 
-Registration ends when setup completes. Treat the definition as read-only after
-that point; document how each adapter enforces or limits late mutation. Repeated
-invocations receive fresh parse results and edit contributions. Sharing the live
-parser is an explicitly in-process setup contract, like the existing registries.
+Scan once per parsed view over the declared subset, recording immutable
+occurrences with original argument indexes and explicit, environment, or default
+value sources. The authoritative index space is the wrapper's argument tuple
+after existing core logging and environment-option normalization. Preserve exact
+tokens and ordering for everything not edited.
 
-### Parsing and token provenance
+Support separate and assigned long-option values, unambiguous short clusters,
+and attached short values. A declared valueless option with an assigned value,
+a missing declared value, a prohibited value form, and an invalid repeat of a
+declared nonrepeatable option are usage errors with exit 2. An undeclared
+`--name=value` is opaque and self-contained. An unknown leading bare option that
+could consume a later declared command leaves command resolution incomplete and
+forwards the original argv; it does not cause a usage error. Use foreign hints to
+resolve known child flags such as a root option followed by its value. A command
+word used as an unknown option's possible value must not be guessed as a command.
 
-The goal's framework adapter exposes immutable parsed values and occurrence records
-that identify the original argv token indexes used by each explicitly supplied
-argument. A frozen outer container must not expose mutable nested parse values.
+By default, `--` ends declared scanning; the remaining tail is opaque and cannot
+be mistaken for commands, wrapper options, or help. A resolved command may
+explicitly opt into scanning its own tail. An option known only on another
+command remains untouched and passes to the child. Command-level strictness
+applies only to truly unknown options in that command's segment, before `--`
+unless tail scanning was explicitly enabled.
 
-For the executable wrapper, the authoritative index space remains `wrapper_args`
-after existing logging and environment-option normalization. Those indexes do not
-refer to the raw process argv before normalization. If an adapter uses another
-token view internally, it must map back to this authoritative tuple.
+After normalization, the goal asks core to route the invocation before
+`before_goal`. Core filters outer hooks and goal dispatch by that one selected
+set, including mandatory plugin dependencies, and exposes the selected IDs to
+`achieve()`. Discovery, import, and setup still occur during application
+construction. An unresolved or unknown command runs plugins whose explicit or
+default participation is every invocation. A parser usage error returns exit 2
+before invocation hooks and child execution.
 
-Occurrence mapping must distinguish:
+Extend argument contributions with index-anchored insertions so semantic
+replacement keeps its position. Parsed occurrences translate to immutable
+contributions; every analyzer still sees the same original call. Reject a
+semantic edit to only part of a shared short-option token unless it replaces the
+whole token. Anchored edits cannot cross the `--` boundary. Revalidate only
+declared syntax after merging and before `prepare_call`. Invalid declared syntax
+returns exit 2 without preparation or child execution; unknown child syntax
+remains the child's responsibility.
 
-- `--option=value` from `--option value`;
-- aliases and repeated occurrences, even when their values are identical;
-- positionals, subcommands, variable-length values, and the `--` separator;
-- explicit CLI values from defaults and environment-derived values, which have no
-  removable CLI occurrence in this normalized input;
-- multiple logical options sharing a token, such as bundled short options.
+## Help and completion
 
-Do not infer source indexes by matching parsed values against argv or by diffing a
-reserialized namespace. Untouched tokens retain their original spelling and order.
-For edits affecting part of a shared token, the adapter must define a lossless
-rewrite within the contribution model or reject that convenience operation. Raw
-index-based contributions remain available.
+`--help` before `--` selects wrapper help mode. Root help runs child help,
+eligible analyzers and finalizers, then appends wrapper help and the full
+unscoped plugin list. Command help includes the goal's and participating plugins'
+command sections. A plugin-owned command's help does not launch the child.
+`before_goal` preemption takes precedence over goal-rendered help. Analyzer
+edits and preemption remain ignored in help mode, and preparation remains
+skipped. `-h` continues to pass through to the child and is reserved from new
+plugin declarations. A `--help` token after `--` does not select wrapper help.
 
-The wrapper must continue accepting arguments belonging to the wrapped executable.
-Parser integration needs a defined partial-parse policy and must not newly reject
-unknown child arguments, execute commands during parsing, or silently consume
-ordinary registered options.
+`--engulf-plugin-help ID` and `--engulf-plugin-help=ID` display focused plugin
+help without launching the child or leaking the selector into child argv.
+Declarative command, option, and positional descriptions provide structured
+help; a command-path-aware callback may add plugin prose. Existing unscoped
+plugin help remains visible on root `--help`.
 
-### Attributed argv modification
+Extend the compiled completion artifact with command paths, placement, arity,
+foreign hints, scoped spellings, and serializable command-aware selectors.
+Dynamic completion for a scoped option activates only its provider owner and
+mandatory dependency closure; static requests remain import-free. Keep
+wrapper-only options and their values hidden from native child completion,
+preserve opaque child words, and suppress child completion for plugin-owned
+commands. Retain the existing native-completer preference, wrapper candidate
+merge, and completion-sourcing opt-in.
 
-For each invocation:
+## Verification and delivery
 
-1. Preserve the immutable authoritative argv tuple and derive the parsed snapshot
-   and token provenance from it.
-2. Dispatch analysis with the same original arguments and parsed view for every
-   plugin. No analyzer sees another plugin's pending modifications.
-3. Let parser-aware helpers translate selected occurrences into immutable
-   `CallContribution` removals and additions. Helpers may use a private builder,
-   but returned contributions remain the integration boundary.
-4. Let dispatch attach the plugin identity, then validate and merge all edits after
-   analysis completes.
-5. Continue existing preemption, preparation, execution, and finalization behavior
-   using the merged arguments. If effective parsed values are needed, derive a
-   separate snapshot after merging without rerunning plugin analysis.
-
-Example:
-
-```text
-Original argv:  ["deploy", "--profile", "dev", "--verbose"]
-Indexes:             0          1        2          3
-
-Parsed occurrence: profile="dev", source_indexes=(1, 2)
-Contribution from com.example.profile:
-  removals = {1, 2}
-  additions = ("--config", "dev.yaml") before the separator
-
-Effective argv: ["deploy", "--verbose", "--config", "dev.yaml"]
-```
-
-Preserve existing merge semantics: removals reference original indexes and are
-unioned; identical added groups are coalesced with the first placement retained;
-distinct groups retain contribution order; additions are not coalesced against
-original tokens. Preserve plugin-attributed validation errors and the original
-and effective arguments already exposed by call events.
-
-Attributed contributions currently identify edit authors during dispatch and merge;
-the merge returns only the effective tuple. A durable or public per-token audit
-trail would be a further contract decision. Do not imply it already exists. If
-introduced, retain all contributing identities when equivalent edits coalesce.
-
-### Completion and help
-
-The goal's adapter uses the completed parser definition to provide help and
-completion. Completion must accept incomplete input, preserve the empty current
-word and cursor context, and avoid execution or preparation side effects.
-
-For the executable wrapper, bridge parser-derived candidates into the existing
-completion registry/provider path. Preserve wrapper-only argument filtering,
-candidate deduplication, native executable completion preference, and explicit
-opt-in for sourcing native completion. The constructor's binary completion provider
-is a fallback when native completion is absent; parser-derived wrapper candidates
-must remain available when native executable completion is present.
-
-Completion does not commit argv edits. Its filtered child-completion context is
-separate from the invocation's authoritative argv and contribution merge.
-
-## Implementation sequence
-
-1. Define the typed goal-specific registration event and adapter contract, including
-   immutable parse results, occurrence provenance, and unsupported syntax behavior.
-   Choose a reference framework; exact public names remain to be designed.
-2. Implement registration through existing setup dispatch. Preserve the default
-   wrapper registry path and existing plugins through an explicit additive design.
-3. Implement provenance and parser-aware contribution helpers. Keep index-based
-   edits working and keep framework selection out of the generic runtime.
-4. Integrate parsing into the wrapper's analysis events with a documented timing
-   relative to normalization and outer lifecycle hooks. Preserve normalization and
-   existing help-mode, preemption, and preparation-unwind contracts.
-5. Connect parser help and completion, including composition with existing plugin
-   registrations and native executable completion.
-6. Demonstrate a second framework through a small goal/adapter example to verify
-   that the integration contract does not depend on the reference framework.
-7. Document authoring, limitations, compatibility, and migration in the owning
-   package READMEs, then run the workspace-required checks.
-
-Goal-specific contracts belong in their API package and implementations in their
-runtime package. Generic packages must not import wrapper or CLI framework
-implementations. Keep `engulf-api` dependency-free, public packages typed, and API
-packages OS-independent. Do not bump existing versions during first-release work.
-
-## Acceptance and validation
-
-- The goal and selected compatible plugins register against the same definition;
-  unselected plugin modules stay unimported. Setup ordering and attributed failures
-  remain deterministic.
-- Two frameworks can supply goal-owned registration and completion integrations
-  without adding framework-specific behavior to Engulf core.
-- Existing wrapper plugins and default argv behavior continue to work unchanged.
-- Tests cover source indexes for assignments, separate values, aliases, repeats,
-  defaults, environment bindings, positionals, subcommands, separators, shared
-  tokens, and unknown child arguments, including unsupported edit failures.
-- Tests cover normalization followed by index-based and parser-aware edits in the
-  same invocation, analyzer isolation, invalid indexes, duplicate removals and
-  additions, placement, preemption, help mode, and preparation failure.
-- Repeated invocations cannot retain parsed values or pending edits from earlier
-  calls; untouched argv tokens remain exact.
-- Completion tests cover partial input, trailing empty words, wrapper filtering,
-  native completion composition, and absence of execution/preparation side effects.
-- Add contract/runtime tests in the owning packages. Run the commands required by
-  [AGENTS.md](../AGENTS.md); if package metadata changes, also run `make build` to
-  build and validate all five distributions.
-
-## Decisions to resolve during implementation
-
-- The first supported framework and the public adapter and event names.
-- Whether framework-specific plugin contracts use a new goal API package or an
-  explicit compatible extension of an existing contract.
-- How each framework supplies reliable provenance and handles shared tokens.
-- Whether parsed data is needed in outer lifecycle hooks; do not introduce a
-  generic parser capability solely to expose it there.
-- Whether modification tracking needs a public audit record beyond the existing
-  attributed contributions and original/effective argv snapshots.
+- Boot a real wrapper with two representative plugins declaring the same option
+  on disjoint commands and a third plugin contributing help or completion to a
+  command owned by another participant. No consumer repository migration is part
+  of this implementation.
+- Run a pass-through corpus with no plugin CLI declarations and assert the child
+  receives byte-identical argv. Include leading child flags with and without
+  foreign arity hints, unknown commands, a command word as an opaque option value,
+  `--` tails, and a no-command line.
+- Cover assigned and separate values, per-option form restrictions, short
+  clusters, environment-only participation, scoped strictness, wrong-scope
+  pass-through, anchored edits, and post-edit validation before preparation.
+- Verify an always-participating collector receives outer hooks on
+  `install-completion`, root help, and unknown commands. Cover child versus
+  plugin-owned help, `before_goal` preemption, `-h` passthrough, and `--help`
+  after `--`.
+- Verify compiled completion activates exactly the matching owner and mandatory
+  dependency closure, while static completion imports no plugin and native
+  child completion receives only the intended normalized words.
+- Run the workspace checks required by `AGENTS.md` and read-only compatibility
+  checks in `../engulf-clab`. Follow the workspace rule against version bumps
+  during first-release development. Do not publish changed packages under an
+  unchanged version; plan a separate versioned release before distribution.

@@ -1,11 +1,14 @@
-# Critique: goal-owned CLI parser with tracked argv edits
+# Historical critique: goal-owned CLI parser with tracked argv edits
 
-Reviews [goal-owned-cli-parser.md](goal-owned-cli-parser.md) against the Engulf
-workspace at `4bac606` (current `master`). Line references point at that commit.
+Status: superseded. This reviews the former goal-owned parser proposal, not the
+[native partial CLI framework plan](goal-owned-cli-parser.md) that replaced it.
+
+The review used Engulf workspace commit `4bac606`. Line references point at that
+commit.
 `goal.py` means `engulf-executable-wrapper/src/engulf_executable_wrapper/goal.py`;
 `completion.py` means the sibling module in the same package.
 
-Status: open. Findings are `G1`–`G11`. `G1`–`G3` block step 1.
+Findings are `G1`–`G11`. `G1`–`G3` blocked step 1 of the former proposal.
 
 Scope: this repository only. Every anchor and behavioural claim below was executed or
 read, not inferred. The merge traces in `G2` are real output from `_merge_edits`.

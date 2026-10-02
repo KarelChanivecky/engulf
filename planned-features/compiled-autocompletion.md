@@ -282,10 +282,11 @@ indexes are zero-based and exclude the executable. Normalization is fully derive
 from the static option schema before runtime matching starts. Runtime predicates
 may filter candidates, but cannot redefine option arity or hiding rules mid-request.
 
-There is no inferred command grammar: matching `command` at a known word position
-does not understand arbitrary child options that take values. An adapter may supply
-the explicit command/positional nodes described above. Keep this separate from the
-[goal-owned parser proposal](goal-owned-cli-parser.md).
+The implemented baseline has no inferred command grammar: matching `command` at a
+known word position does not understand arbitrary child options that take values.
+The planned [native partial CLI framework](goal-owned-cli-parser.md) adds declared
+command and option arity data to the compiled artifact while preserving opaque
+child arguments.
 
 ## Compilation and binding
 
