@@ -390,15 +390,31 @@ trust, data ownership, or plugin dependency order.
 workspaces. `api.state(StateScope.WORKSPACE)` returns a `WorkspaceState` for the
 canonical current workspace. The goal receives the same contracts under a reserved
 goal namespace. Repeated requests for the same scope in one invocation return the
-same handle.
+same handle. Both accessors accept an optional POSIX permission `mode`:
+
+```python
+workspace = api.state(StateScope.WORKSPACE, mode=0o664)
+```
+
+The default is `0o600`. On POSIX, `mode` sets permissions on files written with
+`write_bytes()` or `write_text()` and sets the store directory to a matching mode
+with search bits added for classes granted file access (`0o664` files use a `0o775`
+directory).
+The owner must retain read and write access. Providing a mode updates the cached
+store; omitting it leaves the current mode unchanged. Windows continues to use its
+protected owner/SYSTEM/Administrators ACLs and ignores POSIX mode bits.
+For a workspace store with an explicitly selected mode, invocation finalization
+also applies that mode and the resolved state owner to its regular files and
+directories. Executable file bits are retained; symbolic links, hard-linked files,
+and nested mount points are skipped.
 
 | `StateStore` member | Behavior |
 | --- | --- |
-| `directory` | Create and return the namespaced directory for caller-managed trees. |
+| `directory` | Create and return the namespaced directory for caller-managed trees, applying the selected directory mode. |
 | `path(filename)` | Validate one path component, create the store, and return its child path. |
 | `exists(filename)` | Test a child without creating the store. |
 | `read_bytes()` / `read_text()` | Read a protected child; text defaults to UTF-8 with strict errors. |
-| `write_bytes()` / `write_text()` | Atomically replace one child with private ownership and permissions. |
+| `write_bytes()` / `write_text()` | Atomically replace one child with owner-aware ownership and the selected mode (private by default). |
 | `delete(filename, missing_ok=False)` | Unlink one named child file. It is not a recursive tree-removal API. |
 | `transaction(timeout=None)` | Hold the exclusive store lock and return the same store for a serialized operation sequence. |
 
@@ -409,9 +425,9 @@ such caller-managed trees are the plugin's responsibility.
 
 `WorkspaceState.root` is the canonical workspace represented by the handle.
 `destroy()` idempotently queues removal of that participant's entire workspace
-namespace after postprocessing. `known_workspaces()` returns only workspace records
-in which that participant has state and supports global cleanup operations such as
-destroy-all.
+namespace after postprocessing. `known_workspaces(mode=...)` returns only workspace
+records in which that participant has state and applies the optional mode to those
+handles. It supports global cleanup operations such as destroy-all.
 
 ## State Transactions
 

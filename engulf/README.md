@@ -771,16 +771,25 @@ Plugins and the goal receive API-namespaced user and workspace stores:
 from engulf_api import StateScope
 
 user = api.state(StateScope.USER)
-workspace = api.state(StateScope.WORKSPACE)
+workspace = api.state(StateScope.WORKSPACE, mode=0o664)
 user.write_text("settings.json", data)
 workspace.write_bytes("artifact", payload)
 ```
 
 One filename is one path component. Reads reject symbolic links and Windows reparse
-points. Writes are atomic, private, and owner-aware. Calling `directory` or `path()`
-exposes the namespaced directory so plugins can clone repositories or manage
-directory trees inside their own namespace. `delete()` unlinks one named file; it is
-not a recursive tree-removal API.
+points. Writes are atomic and owner-aware, and use private permissions by default.
+The optional `mode` on `api.state()` selects POSIX permissions for managed writes and
+the store directory; for example, `0o664` gives managed files owner/group read-write
+and other read access, with a `0o775` store directory. The owner must retain read and
+write access. Providing a mode updates the cached store; omitting it leaves the
+current mode unchanged. For an explicitly configured workspace store, invocation
+finalization also applies the selected file and directory modes and resolved state
+owner throughout the namespace, preserving executable bits and skipping symbolic
+links, hard-linked files, and nested mount points. Under sudo, the resolved owner is
+the invoking user from `SUDO_UID` and `SUDO_GID`.
+Calling `directory` or `path()` exposes the namespaced directory so plugins can
+clone repositories or manage directory trees inside their own namespace. `delete()`
+unlinks one named file; it is not a recursive tree-removal API.
 `WorkspaceState.destroy()` queues namespace destruction after postprocessing; an
 empty workspace record is pruned.
 
@@ -788,7 +797,8 @@ On POSIX, the default state home follows `XDG_STATE_HOME` or `~/.local/state`. U
 a valid sudo invocation, state uses the invoking non-root user's home and ownership.
 On Windows, it uses `%LOCALAPPDATA%\Engulf\State`, the process-token user SID,
 protected owner/SYSTEM/Administrators DACLs, and non-inheritable `LockFileEx`
-handles. POSIX uses private modes, ownership, no-follow opens, and `flock`.
+handles. POSIX uses private modes by default, owner-aware ownership, no-follow opens,
+and `flock`.
 
 `StateHomeResolver` and `WorkspaceRootResolver` are application policy and receive
 stable context records. `StateHomeContext` exposes `application_id`, a
