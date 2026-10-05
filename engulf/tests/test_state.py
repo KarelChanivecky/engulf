@@ -175,6 +175,49 @@ class StateTestCase(unittest.TestCase):
             with self.assertRaises(PluginPhaseError):
                 store.exists("user.txt")
 
+    def test_workspace_mode_updates_directory_and_atomic_write_permissions(
+        self,
+    ) -> None:
+        plugin_id = "tests.state.permissions"
+
+        def write_state(event, api) -> None:
+            default = api.state(StateScope.WORKSPACE)
+            workspace = api.state(StateScope.WORKSPACE, mode=0o664)
+            self.assertIs(workspace, default)
+            directory = workspace.directory
+            self.assertTrue(directory.is_dir())
+            workspace.write_text("shared.txt", "shared value")
+            external_directory = directory / "external"
+            external_directory.mkdir()
+            external_file = external_directory / "created-by-action.txt"
+            external_file.write_text("created by the action", encoding="utf-8")
+            external_file.chmod(0o600)
+
+        plugin = StatePlugin(plugin_id, before=write_state)
+        with patch.dict(os.environ, {"SUDO_UID": "", "SUDO_GID": ""}):
+            result = self.run_in(self.make_application(plugin), self.workspace)
+        self.assertEqual(result, 0)
+
+        workspace_directory = (
+            self.workspace_record(self.workspace) / "plugins" / plugin_id
+        )
+        shared_file = workspace_directory / "shared.txt"
+        external_directory = workspace_directory / "external"
+        external_file = external_directory / "created-by-action.txt"
+        self.assertEqual(shared_file.read_text(encoding="utf-8"), "shared value")
+        self.assertEqual(
+            external_file.read_text(encoding="utf-8"),
+            "created by the action",
+        )
+        if os.name == "posix":
+            self.assertEqual(stat.S_IMODE(workspace_directory.stat().st_mode), 0o775)
+            self.assertEqual(stat.S_IMODE(shared_file.stat().st_mode), 0o664)
+            self.assertEqual(stat.S_IMODE(external_directory.stat().st_mode), 0o775)
+            self.assertEqual(stat.S_IMODE(external_file.stat().st_mode), 0o664)
+            self.assertEqual(workspace_directory.stat().st_uid, os.geteuid())
+            self.assertEqual(shared_file.stat().st_uid, os.geteuid())
+            self.assertEqual(external_file.stat().st_uid, os.geteuid())
+
     def test_known_workspaces_persist_and_are_private_to_the_plugin(self) -> None:
         owner_id = "tests.state.owner"
         other_id = "tests.state.other"
@@ -382,13 +425,28 @@ class StateTestCase(unittest.TestCase):
         owner_home.mkdir()
         ignored_xdg = self.directory / "root-xdg"
         account = SimpleNamespace(pw_dir=str(owner_home), pw_gid=2345)
+
+        def write_sudo_state(event, api) -> None:
+            api.state(StateScope.USER, mode=0o664).write_text("marker", "value")
+            workspace = api.state(StateScope.WORKSPACE, mode=0o664)
+            external_file = workspace.directory / "created-by-action.txt"
+            external_file.write_text("workspace value", encoding="utf-8")
+            external_file.chmod(0o600)
+
         plugin = StatePlugin(
             plugin_id,
-            before=lambda event, api: api.state(StateScope.USER).write_text(
-                "marker", "value"
-            ),
+            before=write_sudo_state,
         )
         engulf = self.make_application(plugin, state_home_resolver=None)
+        chown_targets = []
+
+        def record_path_chown(path, owner) -> None:
+            del path
+            chown_targets.append(owner.identifier)
+
+        def record_file_chown(descriptor, owner) -> None:
+            del descriptor
+            chown_targets.append(owner.identifier)
 
         with (
             patch.dict(
@@ -403,8 +461,11 @@ class StateTestCase(unittest.TestCase):
             patch("engulf._state_posix.os.geteuid", return_value=0),
             patch("engulf._state_posix.os.getegid", return_value=0),
             patch("engulf._state_posix.pwd.getpwuid", return_value=account),
-            patch("engulf._state_posix._chown_path"),
-            patch("engulf._state_posix._chown_descriptor"),
+            patch("engulf._state_posix._chown_path", side_effect=record_path_chown),
+            patch(
+                "engulf._state_posix._chown_descriptor",
+                side_effect=record_file_chown,
+            ),
         ):
             result = self.run_in(engulf, self.workspace)
 
@@ -420,6 +481,27 @@ class StateTestCase(unittest.TestCase):
         )
         self.assertEqual(expected.read_text(encoding="utf-8"), "value")
         self.assertFalse(ignored_xdg.exists())
+        self.assertIn("posix:1234:3456", chown_targets)
+        self.assertEqual(stat.S_IMODE(expected.parent.stat().st_mode), 0o775)
+        self.assertEqual(stat.S_IMODE(expected.stat().st_mode), 0o664)
+
+        workspace_digest = hashlib.sha256(
+            os.fsencode(self.workspace.resolve())
+        ).hexdigest()
+        workspace_store = (
+            owner_home
+            / ".local"
+            / "state"
+            / self.application_id
+            / "workspaces"
+            / workspace_digest
+            / "plugins"
+            / plugin_id
+        )
+        workspace_file = workspace_store / "created-by-action.txt"
+        self.assertEqual(workspace_file.read_text(encoding="utf-8"), "workspace value")
+        self.assertEqual(stat.S_IMODE(workspace_store.stat().st_mode), 0o775)
+        self.assertEqual(stat.S_IMODE(workspace_file.stat().st_mode), 0o664)
 
     def test_invalid_catalog_metadata_is_reported(self) -> None:
         plugin_id = "tests.state.catalog"

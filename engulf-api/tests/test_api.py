@@ -322,6 +322,21 @@ class ApiTestCase(unittest.TestCase):
                 with self.assertRaises(TypeError):
                     signature.bind(None, "tests.context.value", object(), True)
 
+    def test_state_mode_is_optional_and_keyword_only(self) -> None:
+        signature = inspect.signature(InvocationAPI.state)
+        parameter = signature.parameters["mode"]
+        self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(parameter.default)
+        self.assertEqual(get_type_hints(InvocationAPI.state)["mode"], int | None)
+        signature.bind(None, StateScope.WORKSPACE, mode=0o664)
+        with self.assertRaises(TypeError):
+            signature.bind(None, StateScope.WORKSPACE, 0o664)
+
+        workspace_signature = inspect.signature(InvocationAPI.known_workspaces)
+        workspace_mode = workspace_signature.parameters["mode"]
+        self.assertIs(workspace_mode.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(workspace_mode.default)
+
     def test_lifecycle_apis_expose_only_generic_capabilities(self) -> None:
         for api_type in (
             DiagnosticsAPI,

@@ -82,17 +82,37 @@ class InvocationAPI(DiagnosticsAPI):
         """
 
     @overload
-    def state(self, scope: Literal[StateScope.WORKSPACE]) -> WorkspaceState: ...
+    def state(
+        self,
+        scope: Literal[StateScope.WORKSPACE],
+        *,
+        mode: int | None = None,
+    ) -> WorkspaceState: ...
 
     @overload
-    def state(self, scope: Literal[StateScope.USER]) -> StateStore: ...
+    def state(
+        self,
+        scope: Literal[StateScope.USER],
+        *,
+        mode: int | None = None,
+    ) -> StateStore: ...
 
     @abstractmethod
-    def state(self, scope: StateScope) -> StateStore:
-        """Return this participant's managed store for the selected scope."""
+    def state(self, scope: StateScope, *, mode: int | None = None) -> StateStore:
+        """Return this participant's managed store for the selected scope.
+
+        ``mode`` selects POSIX permission bits for atomically written files. The
+        state directory receives matching search permissions. Windows keeps its
+        protected ACL behavior. Providing a mode updates the cached store's mode;
+        omitting it leaves the current mode unchanged.
+        """
 
     @abstractmethod
-    def known_workspaces(self) -> tuple[WorkspaceState, ...]:
+    def known_workspaces(
+        self,
+        *,
+        mode: int | None = None,
+    ) -> tuple[WorkspaceState, ...]:
         """Return centrally registered workspaces owned by this participant."""
 
 

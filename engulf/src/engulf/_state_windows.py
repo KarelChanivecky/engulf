@@ -481,7 +481,14 @@ class _WindowsStatePlatform:
         attributes = int(getattr(metadata, "st_file_attributes", 0))
         return bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT) or path.is_symlink()
 
-    def ensure_directory(self, directory: Path, owner: _StateOwner) -> None:
+    def ensure_directory(
+        self,
+        directory: Path,
+        owner: _StateOwner,
+        *,
+        mode: int = 0o700,
+    ) -> None:
+        del mode
         data = _owner_data(owner)
         missing: list[Path] = []
         current = directory
@@ -517,7 +524,15 @@ class _WindowsStatePlatform:
     def read_bytes_no_follow(self, path: Path) -> bytes:
         return self._api.read_file(path)
 
-    def atomic_write(self, path: Path, data: bytes, owner: _StateOwner) -> None:
+    def atomic_write(
+        self,
+        path: Path,
+        data: bytes,
+        owner: _StateOwner,
+        *,
+        mode: int = 0o600,
+    ) -> None:
+        del mode
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{path.name}.", dir=path.parent
         )
@@ -536,6 +551,16 @@ class _WindowsStatePlatform:
             if descriptor >= 0:
                 os.close(descriptor)
             temporary_path.unlink(missing_ok=True)
+
+    def normalize_tree(
+        self,
+        directory: Path,
+        owner: _StateOwner,
+        *,
+        file_mode: int,
+        directory_mode: int,
+    ) -> None:
+        del directory, owner, file_mode, directory_mode
 
     def remove_path(self, path: Path) -> None:
         if not os.path.lexists(path):

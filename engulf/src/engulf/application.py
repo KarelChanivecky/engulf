@@ -836,6 +836,20 @@ class Application[ResultT]:
                 entered,
             )
         finally:
+            permission_failures = state_manager.finalize_workspace_modes()
+            for permission_failure in permission_failures:
+                diagnostics.failure(
+                    "workspace state permission update failed for "
+                    f"{permission_failure.plugin_id} at {permission_failure.root}: "
+                    f"{permission_failure.error}",
+                    plugin_id=(
+                        permission_failure.plugin_id
+                        if permission_failure.plugin_id in plugin_apis
+                        else None
+                    ),
+                    phase="state_permissions",
+                    error=permission_failure.error,
+                )
             cleanup_failures = state_manager.finalize_destructions()
             for failure in cleanup_failures:
                 diagnostics.failure(

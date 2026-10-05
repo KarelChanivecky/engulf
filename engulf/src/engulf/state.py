@@ -59,6 +59,13 @@ class WorkspaceCleanupFailure:
     error: Exception
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspacePermissionFailure:
+    root: Path
+    plugin_id: str
+    error: Exception
+
+
 class InvocationStateManager:
     """Shared state resolution and deferred cleanup for one invocation."""
 
@@ -84,6 +91,7 @@ class InvocationStateManager:
         self._workspace_root: Path | None = None
         self._workspace_resolved = False
         self._pending_destructions: set[tuple[Path, str]] = set()
+        self._workspace_modes: dict[tuple[Path, str], int] = {}
 
     def user_backend(self, plugin_id: str) -> _UserStoreBackend:
         return _UserStoreBackend(self, plugin_id)
@@ -101,6 +109,30 @@ class InvocationStateManager:
 
     def queue_destruction(self, root: Path, plugin_id: str) -> None:
         self._pending_destructions.add((root, plugin_id))
+
+    def queue_workspace_mode(self, root: Path, plugin_id: str, mode: int) -> None:
+        self._workspace_modes[(root, plugin_id)] = _validate_state_mode(mode)
+
+    def finalize_workspace_modes(self) -> tuple[WorkspacePermissionFailure, ...]:
+        if self._catalog is None:
+            return ()
+        failures: list[WorkspacePermissionFailure] = []
+        for (root, plugin_id), mode in sorted(
+            self._workspace_modes.items(),
+            key=lambda item: (os.fspath(item[0][0]), item[0][1]),
+        ):
+            if (root, plugin_id) in self._pending_destructions:
+                continue
+            try:
+                self._get_catalog().normalize_workspace_store(
+                    root,
+                    plugin_id,
+                    file_mode=mode,
+                    directory_mode=_state_directory_mode(mode),
+                )
+            except Exception as error:  # noqa: BLE001 - attempt all store updates.
+                failures.append(WorkspacePermissionFailure(root, plugin_id, error))
+        return tuple(failures)
 
     def finalize_destructions(self) -> tuple[WorkspaceCleanupFailure, ...]:
         failures: list[WorkspaceCleanupFailure] = []
@@ -120,8 +152,14 @@ class InvocationStateManager:
             self._owner = self._platform.resolve_owner(self._environment)
         return self._owner
 
-    def user_directory(self, plugin_id: str, *, create: bool) -> Path | None:
-        return self._get_catalog().user_directory(plugin_id, create=create)
+    def user_directory(
+        self,
+        plugin_id: str,
+        *,
+        create: bool,
+        mode: int = 0o700,
+    ) -> Path | None:
+        return self._get_catalog().user_directory(plugin_id, create=create, mode=mode)
 
     def user_store_lock(
         self,
@@ -147,12 +185,14 @@ class InvocationStateManager:
         *,
         create: bool,
         exclusive: bool,
+        mode: int = 0o700,
     ) -> AbstractContextManager[Path | None]:
         return self._get_catalog().workspace_access(
             root,
             plugin_id,
             create=create,
             exclusive=exclusive,
+            mode=mode,
         )
 
     def workspace_store_lock(
@@ -257,11 +297,25 @@ class RuntimeStateStore(StateStore):
         transaction_factory: Callable[
             [RuntimeStateStore, float | None], AbstractContextManager[StateStore]
         ],
+        *,
+        mode: int = 0o600,
     ) -> None:
         self._backend = backend
         self._require_active = require_active
         self._transaction_factory = transaction_factory
         self._transaction_active = False
+        self._mode = _validate_state_mode(mode)
+        self._directory_mode = _state_directory_mode(self._mode)
+
+    @property
+    def mode(self) -> int:
+        """Return the POSIX mode used for atomically written files."""
+        return self._mode
+
+    def set_mode(self, mode: int) -> None:
+        normalized = _validate_state_mode(mode)
+        self._mode = normalized
+        self._directory_mode = _state_directory_mode(normalized)
 
     @property
     def directory(self) -> Path:
@@ -312,7 +366,12 @@ class RuntimeStateStore(StateStore):
             raise TypeError("state data must be bytes")
         with self._access(create=True, exclusive=True) as directory:
             assert directory is not None
-            _atomic_write(directory / name, data, self._backend.owner)
+            _atomic_write(
+                directory / name,
+                data,
+                self._backend.owner,
+                mode=self._mode,
+            )
 
     def write_text(
         self,
@@ -357,6 +416,7 @@ class RuntimeStateStore(StateStore):
             create=create,
             exclusive=exclusive,
             store_locked=self._transaction_active,
+            mode=self._directory_mode,
         )
 
     def _transaction_lock(self, timeout: float | None) -> AbstractContextManager[None]:
@@ -378,9 +438,19 @@ class RuntimeWorkspaceState(RuntimeStateStore, WorkspaceState):
         transaction_factory: Callable[
             [RuntimeStateStore, float | None], AbstractContextManager[StateStore]
         ],
+        *,
+        mode: int = 0o600,
     ) -> None:
-        super().__init__(backend, require_active, transaction_factory)
+        super().__init__(backend, require_active, transaction_factory, mode=mode)
         self._workspace_backend = backend
+
+    def set_mode(self, mode: int) -> None:
+        super().set_mode(mode)
+        self._workspace_backend.manager.queue_workspace_mode(
+            self._workspace_backend.root,
+            self._workspace_backend.plugin_id,
+            self._mode,
+        )
 
     @property
     def root(self) -> Path:
@@ -405,7 +475,12 @@ class _UserStoreBackend:
         return self.manager.owner
 
     def access(
-        self, *, create: bool, exclusive: bool, store_locked: bool
+        self,
+        *,
+        create: bool,
+        exclusive: bool,
+        store_locked: bool,
+        mode: int,
     ) -> AbstractContextManager[Path | None]:
         @contextmanager
         def access_directory() -> Iterator[Path | None]:
@@ -419,7 +494,11 @@ class _UserStoreBackend:
                 )
             )
             with lock:
-                yield self.manager.user_directory(self.plugin_id, create=create)
+                yield self.manager.user_directory(
+                    self.plugin_id,
+                    create=create,
+                    mode=mode,
+                )
 
         return access_directory()
 
@@ -451,7 +530,12 @@ class _WorkspaceStoreBackend:
         return self.manager.owner
 
     def access(
-        self, *, create: bool, exclusive: bool, store_locked: bool
+        self,
+        *,
+        create: bool,
+        exclusive: bool,
+        store_locked: bool,
+        mode: int,
     ) -> AbstractContextManager[Path | None]:
         @contextmanager
         def access_directory() -> Iterator[Path | None]:
@@ -471,6 +555,7 @@ class _WorkspaceStoreBackend:
                     self.plugin_id,
                     create=create,
                     exclusive=exclusive,
+                    mode=mode,
                 ) as directory,
             ):
                 yield directory
@@ -513,11 +598,17 @@ class _StateCatalog:
         self._store_locks_directory = self._owner_locks_directory / "stores"
         self._lease_locks_directory = self._owner_locks_directory / "leases"
 
-    def user_directory(self, plugin_id: str, *, create: bool) -> Path | None:
+    def user_directory(
+        self,
+        plugin_id: str,
+        *,
+        create: bool,
+        mode: int,
+    ) -> Path | None:
         with self._lock(exclusive=create):
             directory = self._user_directory / plugin_id
             if create:
-                _ensure_directory(directory, self._owner)
+                _ensure_directory(directory, self._owner, mode=mode)
                 return directory
             if not os.path.lexists(directory):
                 return None
@@ -531,12 +622,16 @@ class _StateCatalog:
         *,
         create: bool,
         exclusive: bool,
+        mode: int,
     ) -> AbstractContextManager[Path | None]:
         @contextmanager
         def access_directory() -> Iterator[Path | None]:
             with self._lock(exclusive=exclusive or create):
                 directory = self._workspace_plugin_directory(
-                    root, plugin_id, create=create
+                    root,
+                    plugin_id,
+                    create=create,
+                    mode=mode,
                 )
             yield directory
 
@@ -565,6 +660,41 @@ class _StateCatalog:
                     _require_directory(plugin_directory)
                     roots.append(root)
             return tuple(sorted(roots, key=os.fspath))
+
+    def normalize_workspace_store(
+        self,
+        root: Path,
+        plugin_id: str,
+        *,
+        file_mode: int,
+        directory_mode: int,
+    ) -> None:
+        if not os.path.lexists(self._workspace_directory(root) / "plugins" / plugin_id):
+            return
+        with (
+            self.store_lock(
+                scope="workspace",
+                plugin_id=plugin_id,
+                root=root,
+                exclusive=True,
+                timeout=None,
+                operation="workspace state permission update",
+            ),
+            self._lock(exclusive=True),
+        ):
+            directory = self._workspace_plugin_directory(
+                root,
+                plugin_id,
+                create=False,
+                mode=directory_mode,
+            )
+            if directory is not None:
+                self._owner.platform.normalize_tree(
+                    directory,
+                    self._owner,
+                    file_mode=file_mode,
+                    directory_mode=directory_mode,
+                )
 
     def destroy_plugin_workspace(self, root: Path, plugin_id: str) -> None:
         if not os.path.lexists(self._application_directory):
@@ -673,7 +803,12 @@ class _StateCatalog:
         return acquire_all()
 
     def _workspace_plugin_directory(
-        self, root: Path, plugin_id: str, *, create: bool
+        self,
+        root: Path,
+        plugin_id: str,
+        *,
+        create: bool,
+        mode: int,
     ) -> Path | None:
         workspace_directory = self._workspace_directory(root)
         plugin_directory = workspace_directory / "plugins" / plugin_id
@@ -687,7 +822,7 @@ class _StateCatalog:
             self._validate_workspace_record(workspace_directory, root)
 
         if create:
-            _ensure_directory(plugin_directory, self._owner)
+            _ensure_directory(plugin_directory, self._owner, mode=mode)
             return plugin_directory
         if not os.path.lexists(plugin_directory):
             return None
@@ -746,6 +881,23 @@ class _StateCatalog:
             timeout=None,
             timeout_message="internal state catalog lock timed out",
         )
+
+
+def _validate_state_mode(mode: int) -> int:
+    if isinstance(mode, bool) or not isinstance(mode, int):
+        raise TypeError("state mode must be an integer permission mode")
+    if mode < 0 or mode > 0o777:
+        raise ValueError("state mode must contain only permission bits")
+    if (mode & 0o600) != 0o600:
+        raise ValueError("state mode must keep owner read and write permissions")
+    return mode
+
+
+def _state_directory_mode(mode: int) -> int:
+    # File access needs matching directory search permissions. Keep the directory
+    # owner-readable, writable, and searchable for managed operations.
+    search_bits = ((mode & 0o444) >> 2) | ((mode & 0o222) >> 1)
+    return mode | 0o100 | search_bits
 
 
 def _validate_lock_timeout(timeout: float | None) -> float | None:
@@ -843,8 +995,13 @@ def _validate_filename(filename: str) -> str:
     return filename
 
 
-def _ensure_directory(directory: Path, owner: _StateOwner) -> None:
-    owner.platform.ensure_directory(directory, owner)
+def _ensure_directory(
+    directory: Path,
+    owner: _StateOwner,
+    *,
+    mode: int = 0o700,
+) -> None:
+    owner.platform.ensure_directory(directory, owner, mode=mode)
 
 
 def _require_directory(directory: Path) -> None:
@@ -855,8 +1012,14 @@ def _read_bytes_no_follow(path: Path) -> bytes:
     return get_state_platform().read_bytes_no_follow(path)
 
 
-def _atomic_write(path: Path, data: bytes, owner: _StateOwner) -> None:
-    owner.platform.atomic_write(path, data, owner)
+def _atomic_write(
+    path: Path,
+    data: bytes,
+    owner: _StateOwner,
+    *,
+    mode: int = 0o600,
+) -> None:
+    owner.platform.atomic_write(path, data, owner, mode=mode)
 
 
 def _remove_path(path: Path) -> None:

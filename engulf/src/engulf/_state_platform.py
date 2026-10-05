@@ -32,7 +32,13 @@ class _StatePlatform(Protocol):
     def is_link(self, path: Path) -> bool:
         """Return whether a path is a symbolic link or equivalent redirect."""
 
-    def ensure_directory(self, directory: Path, owner: _StateOwner) -> None:
+    def ensure_directory(
+        self,
+        directory: Path,
+        owner: _StateOwner,
+        *,
+        mode: int = 0o700,
+    ) -> None:
         """Create and secure a directory without following redirected paths."""
 
     def require_directory(self, directory: Path) -> None:
@@ -41,8 +47,25 @@ class _StatePlatform(Protocol):
     def read_bytes_no_follow(self, path: Path) -> bytes:
         """Read one ordinary file without following a redirected path."""
 
-    def atomic_write(self, path: Path, data: bytes, owner: _StateOwner) -> None:
-        """Atomically replace one owner-private state file."""
+    def atomic_write(
+        self,
+        path: Path,
+        data: bytes,
+        owner: _StateOwner,
+        *,
+        mode: int = 0o600,
+    ) -> None:
+        """Atomically replace one state file with its selected permissions."""
+
+    def normalize_tree(
+        self,
+        directory: Path,
+        owner: _StateOwner,
+        *,
+        file_mode: int,
+        directory_mode: int,
+    ) -> None:
+        """Set ownership and permissions for a managed directory tree."""
 
     def remove_path(self, path: Path) -> None:
         """Remove one tree or redirected path without traversing a redirect."""

@@ -136,16 +136,30 @@ class RuntimePluginAPI(BeforeGoalAPI, AfterGoalAPI):
         self._contexts.set(context_id, value, allow_unused=allow_unused)
 
     @overload
-    def state(self, scope: Literal[StateScope.WORKSPACE]) -> WorkspaceState: ...
+    def state(
+        self,
+        scope: Literal[StateScope.WORKSPACE],
+        *,
+        mode: int | None = None,
+    ) -> WorkspaceState: ...
 
     @overload
-    def state(self, scope: Literal[StateScope.USER]) -> StateStore: ...
+    def state(
+        self,
+        scope: Literal[StateScope.USER],
+        *,
+        mode: int | None = None,
+    ) -> StateStore: ...
 
-    def state(self, scope: StateScope) -> StateStore:
-        return self._state.state(scope)
+    def state(self, scope: StateScope, *, mode: int | None = None) -> StateStore:
+        return self._state.state(scope, mode=mode)
 
-    def known_workspaces(self) -> tuple[WorkspaceState, ...]:
-        return self._state.known_workspaces()
+    def known_workspaces(
+        self,
+        *,
+        mode: int | None = None,
+    ) -> tuple[WorkspaceState, ...]:
+        return self._state.known_workspaces(mode=mode)
 
     def _require_active(self, operation: str) -> None:
         self._activation.require_active(operation)

@@ -96,7 +96,13 @@ class _PosixStatePlatform:
     def is_link(self, path: Path) -> bool:
         return path.is_symlink()
 
-    def ensure_directory(self, directory: Path, owner: _StateOwner) -> None:
+    def ensure_directory(
+        self,
+        directory: Path,
+        owner: _StateOwner,
+        *,
+        mode: int = 0o700,
+    ) -> None:
         missing: list[Path] = []
         current = directory
         while not os.path.lexists(current):
@@ -114,10 +120,12 @@ class _PosixStatePlatform:
             except FileExistsError:
                 self.require_directory(path)
                 continue
-            path.chmod(0o700)
             _chown_path(path, owner)
+            _chmod_directory(path, 0o700)
 
         self.require_directory(directory)
+        _chown_path(directory, owner)
+        _chmod_directory(directory, mode)
 
     def require_directory(self, directory: Path) -> None:
         metadata = directory.lstat()
@@ -135,14 +143,21 @@ class _PosixStatePlatform:
         finally:
             os.close(descriptor)
 
-    def atomic_write(self, path: Path, data: bytes, owner: _StateOwner) -> None:
+    def atomic_write(
+        self,
+        path: Path,
+        data: bytes,
+        owner: _StateOwner,
+        *,
+        mode: int = 0o600,
+    ) -> None:
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{path.name}.", dir=path.parent
         )
         temporary_path = Path(temporary_name)
         try:
-            os.fchmod(descriptor, 0o600)
             _chown_descriptor(descriptor, owner)
+            os.fchmod(descriptor, mode)
             with os.fdopen(descriptor, "wb", closefd=False) as stream:
                 stream.write(data)
                 stream.flush()
@@ -162,6 +177,27 @@ class _PosixStatePlatform:
             if descriptor >= 0:
                 os.close(descriptor)
             temporary_path.unlink(missing_ok=True)
+
+    def normalize_tree(
+        self,
+        directory: Path,
+        owner: _StateOwner,
+        *,
+        file_mode: int,
+        directory_mode: int,
+    ) -> None:
+        descriptor = _open_directory(directory)
+        try:
+            root_device = os.fstat(descriptor).st_dev
+            _normalize_tree_descriptor(
+                descriptor,
+                owner,
+                file_mode=file_mode,
+                directory_mode=directory_mode,
+                root_device=root_device,
+            )
+        finally:
+            os.close(descriptor)
 
     def remove_path(self, path: Path) -> None:
         if not os.path.lexists(path):
@@ -253,6 +289,95 @@ def _chown_path(path: Path, owner: _StateOwner) -> None:
     data = _owner_data(owner)
     if os.geteuid() == 0:
         os.chown(path, data.uid, data.gid, follow_symlinks=False)
+
+
+def _chmod_directory(path: Path, mode: int) -> None:
+    descriptor = _open_directory(path)
+    try:
+        os.fchmod(descriptor, mode)
+    finally:
+        os.close(descriptor)
+
+
+def _open_directory(path: Path) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+    os.close(descriptor)
+    raise StateCatalogError(f"state path is not a directory: {path}")
+
+
+def _normalize_tree_descriptor(
+    descriptor: int,
+    owner: _StateOwner,
+    *,
+    file_mode: int,
+    directory_mode: int,
+    root_device: int,
+) -> None:
+    _chown_descriptor(descriptor, owner)
+    os.fchmod(descriptor, directory_mode)
+
+    with os.scandir(descriptor) as entries:
+        entry_names = [entry.name for entry in entries]
+
+    for name in entry_names:
+        try:
+            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            continue
+        if stat.S_ISDIR(metadata.st_mode):
+            child_descriptor = _open_directory_at(descriptor, name)
+            try:
+                if os.fstat(child_descriptor).st_dev != root_device:
+                    continue
+                _normalize_tree_descriptor(
+                    child_descriptor,
+                    owner,
+                    file_mode=file_mode,
+                    directory_mode=directory_mode,
+                    root_device=root_device,
+                )
+            finally:
+                os.close(child_descriptor)
+            continue
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink > 1:
+            continue
+
+        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        file_descriptor = os.open(name, flags, dir_fd=descriptor)
+        try:
+            current = os.fstat(file_descriptor)
+            if (
+                not stat.S_ISREG(current.st_mode)
+                or current.st_nlink > 1
+                or current.st_dev != root_device
+            ):
+                continue
+            _chown_descriptor(file_descriptor, owner)
+            executable_bits = stat.S_IMODE(current.st_mode) & 0o111 & directory_mode
+            os.fchmod(file_descriptor, file_mode | executable_bits)
+        finally:
+            os.close(file_descriptor)
+
+
+def _open_directory_at(parent_descriptor: int, name: str) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return os.open(name, flags, dir_fd=parent_descriptor)
 
 
 def _chown_descriptor(descriptor: int, owner: _StateOwner) -> None:

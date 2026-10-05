@@ -22,6 +22,7 @@ from .state import (
     RuntimeStateStore,
     RuntimeWorkspaceState,
     _validate_lock_timeout,
+    _validate_state_mode,
 )
 
 
@@ -201,15 +202,19 @@ class _StateCapabilities:
         self._workspace_state: RuntimeWorkspaceState | None = None
         self._known_workspace_states: dict[Path, RuntimeWorkspaceState] = {}
 
-    def state(self, scope: StateScope) -> StateStore:
+    def state(self, scope: StateScope, *, mode: int | None = None) -> StateStore:
         self._require_active("state")
+        selected_mode = 0o600 if mode is None else _validate_state_mode(mode)
         if scope is StateScope.USER:
             if self._user_state is None:
                 self._user_state = RuntimeStateStore(
                     self._state_manager.user_backend(self._participant_id),
                     self._require_active,
                     self._transaction_factory,
+                    mode=selected_mode,
                 )
+            elif mode is not None:
+                self._user_state.set_mode(selected_mode)
             return self._user_state
         if scope is StateScope.WORKSPACE:
             if self._workspace_state is None:
@@ -217,15 +222,23 @@ class _StateCapabilities:
                     self._state_manager.current_workspace_backend(self._participant_id),
                     self._require_active,
                     self._transaction_factory,
+                    mode=selected_mode,
                 )
                 self._known_workspace_states[self._workspace_state.root] = (
                     self._workspace_state
                 )
+            if mode is not None:
+                self._workspace_state.set_mode(selected_mode)
             return self._workspace_state
         raise ValueError(f"unsupported state scope: {scope!r}")
 
-    def known_workspaces(self) -> tuple[WorkspaceState, ...]:
+    def known_workspaces(
+        self,
+        *,
+        mode: int | None = None,
+    ) -> tuple[WorkspaceState, ...]:
         self._require_active("known_workspaces")
+        selected_mode = 0o600 if mode is None else _validate_state_mode(mode)
         states: list[RuntimeWorkspaceState] = []
         for backend in self._state_manager.known_workspace_backends(
             self._participant_id
@@ -236,8 +249,11 @@ class _StateCapabilities:
                     backend,
                     self._require_active,
                     self._transaction_factory,
+                    mode=selected_mode,
                 )
                 self._known_workspace_states[backend.root] = state
+            if mode is not None:
+                state.set_mode(selected_mode)
             states.append(state)
         return tuple(states)
 
